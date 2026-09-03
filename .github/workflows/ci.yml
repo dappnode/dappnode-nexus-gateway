@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Build and test gateway
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Secret scan
+        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 detect --no-git --source . --redact --verbose
+
+      - name: Build gateway
+        run: go build ./apps/gateway
+
+      - name: Compile measured enclave profile
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -tags nitro_enclave -run '^$' ./...
+
+      - name: Test enclave networking and build profile
+        run: CGO_ENABLED=0 go test -tags nitro_enclave ./apps/gateway/internal/enclave/network ./apps/gateway/internal/enclave/profile
+
+      - name: Cross-build measured enclave profile for arm64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags nitro_enclave ./apps/gateway
+
+      - name: Run tests
+        run: go test ./...
+
+      # The KMS allowlist transformations decide which enclave measurements can
+      # decrypt Gateway secrets, so they are tested like any other code. The
+      # tests stub the two functions that call AWS and never reach the network.
+      - name: Test KMS allowlist transformations
+        run: ./deploy/nitro/kms-allowlist-test.sh
+
+  docker:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build gateway image
+        run: docker build -f apps/gateway/Dockerfile -t dappnode-nexus-gateway:ci .
+
+      - name: Build measured enclave image
+        run: |
+          docker build \
+            -f apps/gateway/Dockerfile.enclave \
+            --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+            --build-arg AWS_REGION=eu-central-1 \
+            --build-arg KMS_KEY_ARN=arn:aws:kms:eu-central-1:111122223333:key/12345678-1234-1234-1234-123456789012 \
+            -t dappnode-nexus-gateway-enclave:ci \
+            .

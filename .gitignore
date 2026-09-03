@@ -1,0 +1,21 @@
+.env
+.env.*
+!.env.example
+
+# Build outputs
+/gateway
+/bin/
+/dist/
+/coverage.out
+
+# Local data and generated artifacts
+/backups/
+/models/
+
+# Go/tool caches
+/.cache/
+
+# OS/editor noise
+.DS_Store
+.vscode/*
+!.vscode/extensions.json

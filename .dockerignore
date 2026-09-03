@@ -1,0 +1,14 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+
+/gateway
+/bin
+/dist
+/coverage.out
+/backups
+/models
+
+.DS_Store

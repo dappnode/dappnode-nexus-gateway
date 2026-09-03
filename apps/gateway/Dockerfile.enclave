@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+# Pin upstream build inputs by digest. Together with SOURCE_DATE_EPOCH and
+# rewrite-timestamp (see deploy/nitro/build-release-assets.sh) this builds
+# reproducibly: the same revision yields the same PCR0/PCR1/PCR2 on any x86_64
+# machine, so a published release can be independently rebuilt and checked with
+# deploy/nitro/verify-build.sh. Build this image with `docker buildx build`
+# only -- a plain `docker build` skips the timestamp normalisation and silently
+# produces different measurements.
+FROM golang:1.26.4-alpine3.24@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS builder
+
+ARG SOURCE_REVISION
+ARG AWS_REGION
+ARG KMS_KEY_ARN
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# Reject values that could break linker-flag tokenization.
+RUN printf '%s' "$SOURCE_REVISION" | grep -Eq '^[0-9a-f]{40}$'
+RUN printf '%s' "$AWS_REGION" | grep -Eq '^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$'
+RUN printf '%s' "$KMS_KEY_ARN" | grep -Eq '^arn:(aws|aws-us-gov|aws-cn):kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-fA-F-]{36}$'
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -buildvcs=false \
+    -trimpath \
+    -tags nitro_enclave \
+    -ldflags="-s -w -buildid= \
+      -X github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/profile.SourceRevision=${SOURCE_REVISION} \
+      -X github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/profile.AWSRegion=${AWS_REGION} \
+      -X github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/profile.KMSKeyARN=${KMS_KEY_ARN}" \
+    -o /out/gateway ./apps/gateway
+
+# No shell, package manager, or writable application data is included in the
+# enclave runtime image. The Go binary is fully static.
+FROM scratch
+
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /out/gateway /gateway
+
+ENTRYPOINT ["/gateway"]
