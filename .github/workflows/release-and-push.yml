@@ -102,6 +102,13 @@ jobs:
           echo "digest=$image_digest" >> "$GITHUB_OUTPUT"
           docker buildx imagetools inspect "$ECR_REGISTRY/$IMAGE_NAME@$image_digest"
 
+      # The docker driver silently ignores rewrite-timestamp, so every release
+      # measures differently. Only docker-container honours it.
+      - name: Set up Buildx (docker-container driver)
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          driver: docker-container
+
       - name: Build EIF and release metadata
         id: enclave
         env:
