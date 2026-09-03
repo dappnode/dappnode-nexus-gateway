@@ -38,6 +38,19 @@ docker buildx version >/dev/null 2>&1 || {
   printf 'docker buildx is required: the reproducible build depends on rewrite-timestamp\n' >&2
   exit 1
 }
+
+# The docker driver ignores rewrite-timestamp and would report a mismatch
+# against an honest release, so refuse to run rather than accuse falsely.
+# awk must not exit early here: SIGPIPE on docker would abort the script.
+verify_builder_driver="$(docker buildx inspect --bootstrap 2>/dev/null | awk -F': *' '/^Driver:/{if (driver == "") driver = $2} END {print driver}')" || verify_builder_driver=""
+if [[ "$verify_builder_driver" != "docker-container" ]]; then
+  printf 'cannot verify with the %s buildx driver: it ignores rewrite-timestamp\n' \
+    "${verify_builder_driver:-unknown}" >&2
+  printf 'and would report a mismatch for a correctly built release. Run:\n' >&2
+  printf '  docker buildx create --driver docker-container --use\n' >&2
+  printf 'and try again.\n' >&2
+  exit 1
+fi
 [[ -f "$manifest_path" ]] || { printf 'no such manifest: %s\n' "$manifest_path" >&2; exit 1; }
 
 # Newline-separated rather than @tsv: tab is an IFS whitespace character, so a
@@ -124,7 +137,9 @@ fail() {
 printf 'Rebuilding %s (source_date_epoch=%s)\nThis takes a few minutes.\n' \
   "${revision:0:12}" "$source_date_epoch"
 
-docker build --pull -q \
+# --load: a docker-container builder keeps results in the build cache, and
+# build-enclave below needs the image in the daemon.
+docker buildx build --pull -q --load \
   -f "$context/deploy/nitro/nitro-cli-builder.Dockerfile" \
   -t "$nitro_cli_image" \
   "$context/deploy/nitro" >>"$build_log" 2>&1 || fail

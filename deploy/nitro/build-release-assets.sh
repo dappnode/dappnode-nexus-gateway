@@ -88,20 +88,35 @@ artifact_dir_absolute="$(realpath "$ARTIFACT_DIR")"
 # --provenance=false keeps a build-time attestation (which embeds the clock and
 # the runner identity) out of the image. Without both, two builds of identical
 # source produce different layers and therefore different measurements.
-docker buildx build --pull --no-cache --provenance=false \
-  --label "org.opencontainers.image.source=https://github.com/${SOURCE_REPOSITORY}" \
-  --label "org.opencontainers.image.revision=${SOURCE_REVISION}" \
-  --label "org.opencontainers.image.version=${VERSION}" \
-  --build-arg "SOURCE_REVISION=${SOURCE_REVISION}" \
-  --build-arg "AWS_REGION=${AWS_REGION}" \
-  --build-arg "KMS_KEY_ARN=${KMS_KEY_ARN}" \
-  -f apps/gateway/Dockerfile.enclave \
-  --output "type=docker,name=${enclave_image},rewrite-timestamp=true" \
-  .
+#
+# The docker driver accepts rewrite-timestamp and ignores it, normalising only
+# the config's created field, so it must not be used to cut a release.
+# awk must not exit early here: SIGPIPE on docker would abort the script.
+builder_driver="$(docker buildx inspect --bootstrap 2>/dev/null | awk -F': *' '/^Driver:/{if (driver == "") driver = $2} END {print driver}')" || builder_driver=""
+if [[ "$builder_driver" != "docker-container" ]]; then
+  printf 'reproducible build check failed: buildx driver is %s, need docker-container\n' \
+    "${builder_driver:-unknown}" >&2
+  printf 'The docker driver silently ignores rewrite-timestamp, so this build would\n' >&2
+  printf 'produce measurements nobody else can reproduce. Create a builder with:\n' >&2
+  printf '  docker buildx create --driver docker-container --use\n' >&2
+  exit 1
+fi
 
-# A buildx too old to honour rewrite-timestamp would still succeed here and
-# publish a release that nobody can reproduce, so prove the normalisation
-# actually applied rather than assuming it did.
+build_enclave_image() {
+  docker buildx build --pull --no-cache --provenance=false \
+    --label "org.opencontainers.image.source=https://github.com/${SOURCE_REPOSITORY}" \
+    --label "org.opencontainers.image.revision=${SOURCE_REVISION}" \
+    --label "org.opencontainers.image.version=${VERSION}" \
+    --build-arg "SOURCE_REVISION=${SOURCE_REVISION}" \
+    --build-arg "AWS_REGION=${AWS_REGION}" \
+    --build-arg "KMS_KEY_ARN=${KMS_KEY_ARN}" \
+    -f apps/gateway/Dockerfile.enclave \
+    --output "type=docker,name=$1,rewrite-timestamp=true" \
+    .
+}
+
+build_enclave_image "$enclave_image"
+
 image_created_epoch="$(date -u -d "$(docker image inspect --format '{{.Created}}' "$enclave_image")" +%s)"
 if [[ "$image_created_epoch" != "$SOURCE_DATE_EPOCH" ]]; then
   printf 'reproducible build check failed: image timestamp is %s, expected %s\n' \
@@ -111,7 +126,25 @@ if [[ "$image_created_epoch" != "$SOURCE_DATE_EPOCH" ]]; then
   exit 1
 fi
 
-docker build --pull \
+# A normalised created field is not proof the layers were normalised, so test
+# determinism by building twice instead of asserting it in the manifest.
+determinism_image="${enclave_image}-determinism-check"
+build_enclave_image "$determinism_image"
+first_image_id="$(docker image inspect --format '{{.Id}}' "$enclave_image")"
+second_image_id="$(docker image inspect --format '{{.Id}}' "$determinism_image")"
+docker image rm -f "$determinism_image" >/dev/null 2>&1 || true
+if [[ "$first_image_id" != "$second_image_id" ]]; then
+  printf 'reproducible build check failed: two builds of %s produced different images\n' \
+    "$SOURCE_REVISION" >&2
+  printf '  first:  %s\n' "$first_image_id" >&2
+  printf '  second: %s\n' "$second_image_id" >&2
+  printf 'Publishing these measurements would break deploy/nitro/verify-build.sh.\n' >&2
+  exit 1
+fi
+
+# --load is required: a docker-container builder leaves results in the build
+# cache, and build-enclave below needs the image in the daemon.
+docker buildx build --pull --load \
   -f deploy/nitro/nitro-cli-builder.Dockerfile \
   -t "$nitro_cli_image" \
   deploy/nitro
