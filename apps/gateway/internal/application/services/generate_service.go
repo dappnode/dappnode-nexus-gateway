@@ -17,6 +17,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// StreamFinalizationTimeout bounds trailing usage collection and accounting.
+const StreamFinalizationTimeout = 5 * time.Second
+
 // GenerateService is the single canonical execution path for all generation endpoints.
 type GenerateService struct {
 	auth          ports.AuthService
@@ -512,6 +515,7 @@ type usageTrackingStream struct {
 	providerResponseID string
 	finished           bool
 	endReason          string
+	finalizeBy         time.Time
 }
 
 func (s *usageTrackingStream) Recv() (domain.StreamEvent, error) {
@@ -526,6 +530,7 @@ func (s *usageTrackingStream) Recv() (domain.StreamEvent, error) {
 		}
 		if err == io.EOF {
 			s.endReason = "eof"
+			s.beginFinalization()
 			s.recordCompletion(nil)
 			return event, err
 		}
@@ -548,6 +553,7 @@ func (s *usageTrackingStream) Recv() (domain.StreamEvent, error) {
 	}
 
 	if event.Type == domain.StreamEventCompleted {
+		s.beginFinalization()
 		if event.FinishReason != nil {
 			s.finishReason = event.FinishReason
 		}
@@ -579,6 +585,11 @@ func (s *usageTrackingStream) recordCompletion(err error) {
 	}
 	s.finished = true
 	ctx := context.WithoutCancel(s.ctx)
+	if !s.finalizeBy.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, s.finalizeBy)
+		defer cancel()
+	}
 	latencyMs := time.Since(s.start).Milliseconds()
 	if err != nil {
 		err = sanitizeErrorWithPIIMapping(err, s.piiMapping)
@@ -619,6 +630,12 @@ func (s *usageTrackingStream) recordCompletion(err error) {
 	} else {
 		fields = append(s.logFields(), "metering_status", "accepted")
 		s.service.logger.Info("stream metering completed", fields...)
+	}
+}
+
+func (s *usageTrackingStream) beginFinalization() {
+	if s.finalizeBy.IsZero() {
+		s.finalizeBy = time.Now().Add(StreamFinalizationTimeout)
 	}
 }
 
