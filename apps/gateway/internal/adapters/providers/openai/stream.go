@@ -12,6 +12,7 @@ import (
 
 // Stream reads SSE events from an OpenAI-compatible streaming response.
 type Stream struct {
+	diagnostics             *streamDiagnostics
 	resp                    *http.Response
 	scanner                 *bufio.Scanner
 	done                    bool
@@ -51,24 +52,41 @@ func (s *Stream) Recv() (domain.StreamEvent, error) {
 		}
 
 		if !strings.HasPrefix(line, "data: ") {
+			if s.diagnostics != nil && strings.HasPrefix(line, "data:") {
+				s.diagnostics.unsupported++
+			}
 			continue
 		}
 
 		data := strings.TrimPrefix(line, "data: ")
 
 		if data == "[DONE]" {
+			s.diagnostics.end("done_marker", nil)
 			s.done = true
 			return domain.StreamEvent{}, io.EOF
 		}
 
+		if s.diagnostics != nil {
+			s.diagnostics.chunks++
+		}
 		var chunk chatCompletionChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			if s.diagnostics != nil {
+				s.diagnostics.malformed++
+			}
 			continue
 		}
 		if err := providerBaseResponseError(chunk.BaseResp); err != nil {
+			if s.diagnostics != nil {
+				s.diagnostics.observe(chunk, nil)
+			}
+			s.diagnostics.end("provider_error", err)
 			return domain.StreamEvent{}, err
 		}
 		events := mapChunkToStreamEvents(chunk, s.includeReasoningContent)
+		if s.diagnostics != nil {
+			s.diagnostics.observe(chunk, events)
+		}
 		if len(events) == 0 {
 			continue
 		}
@@ -84,14 +102,17 @@ func (s *Stream) Recv() (domain.StreamEvent, error) {
 	}
 
 	if err := s.scanner.Err(); err != nil {
+		s.diagnostics.end("read_error", err)
 		return domain.StreamEvent{}, err
 	}
 
+	s.diagnostics.end("eof", nil)
 	s.done = true
 	return domain.StreamEvent{}, io.EOF
 }
 
 func (s *Stream) Close() error {
+	s.diagnostics.end("closed", nil)
 	s.done = true
 	return s.resp.Body.Close()
 }
@@ -150,7 +171,20 @@ func providerBaseResponseError(resp *providerBaseResponse) error {
 	)
 }
 
-func mapChunkToStreamEvents(chunk chatCompletionChunk, includeReasoningContent ...bool) []domain.StreamEvent {
+func mapChunkToStreamEvents(chunk chatCompletionChunk, includeReasoningContent ...bool) (events []domain.StreamEvent) {
+	// Usage is independent of the delta shape. Some compatible providers put
+	// it on text, role, or tool deltas instead of the final usage-only chunk.
+	defer func() {
+		if chunk.Usage == nil {
+			return
+		}
+		if len(events) == 0 {
+			// Preserve usage even when the chunk has no visible delta. A role
+			// event carries it to metering without claiming generation is done.
+			events = []domain.StreamEvent{{Type: domain.StreamEventOutputMessageDelta}}
+		}
+		events[0].Usage = chunkUsageToDomain(chunk.Usage)
+	}()
 	keepReasoning := len(includeReasoningContent) > 0 && includeReasoningContent[0]
 	// Handle usage-only chunk (often last chunk with stream_options.include_usage)
 	if len(chunk.Choices) == 0 && chunk.Usage != nil {

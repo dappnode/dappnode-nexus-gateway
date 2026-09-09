@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/dto"
@@ -41,7 +42,7 @@ func WriteErrorWithLog(w http.ResponseWriter, r *http.Request, logger ports.Logg
 		logger.Error("untyped internal error",
 			"request_id", middleware.GetRequestID(r.Context()),
 			"path", r.URL.Path,
-			"original_error", err.Error(),
+			"error_type", fmt.Sprintf("%T", err),
 		)
 		gwErr = domain.ErrInternal("an internal error occurred")
 	}
@@ -53,9 +54,11 @@ func WriteErrorWithLog(w http.ResponseWriter, r *http.Request, logger ports.Logg
 			"status", gwErr.HTTPStatus,
 			"gateway_status", gwErr.HTTPStatus,
 			"error_code", gwErr.Code,
-			"error", gwErr.Message,
 		}
-		fields = append(fields, gwErr.LogFields()...)
+		// Provider errors can echo prompts; only retain numeric upstream status.
+		if status, ok := gwErr.Metadata["upstream_status"].(int); ok {
+			fields = append(fields, "upstream_status", status)
+		}
 		logger.Error("request failed", fields...)
 	} else if gwErr.HTTPStatus >= 400 {
 		logger.Warn("request error",
@@ -63,7 +66,6 @@ func WriteErrorWithLog(w http.ResponseWriter, r *http.Request, logger ports.Logg
 			"status", gwErr.HTTPStatus,
 			"gateway_status", gwErr.HTTPStatus,
 			"error_code", gwErr.Code,
-			"error", gwErr.Message,
 		)
 	}
 

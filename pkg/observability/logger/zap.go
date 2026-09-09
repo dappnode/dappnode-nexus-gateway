@@ -14,23 +14,7 @@ type ZapLogger struct {
 }
 
 func NewZapLogger(level string) (*ZapLogger, error) {
-	cfg := zap.NewProductionConfig()
-	cfg.Level = zap.NewAtomicLevel()
-	verbose := false
-
-	switch level {
-	case "debug":
-		cfg.Level.SetLevel(zap.DebugLevel)
-		verbose = true
-	case "info":
-		cfg.Level.SetLevel(zap.InfoLevel)
-	case "warn":
-		cfg.Level.SetLevel(zap.WarnLevel)
-	case "error":
-		cfg.Level.SetLevel(zap.ErrorLevel)
-	default:
-		cfg.Level.SetLevel(zap.InfoLevel)
-	}
+	cfg, verbose := requestLoggingConfig(level)
 
 	l, err := cfg.Build(zap.AddCallerSkip(1))
 	if err != nil {
@@ -73,4 +57,29 @@ func (l *ZapLogger) Verbose() bool {
 
 func (l *ZapLogger) Sync() {
 	l.sugar.Sync()
+}
+
+func requestLoggingConfig(level string) (zap.Config, bool) {
+	cfg := zap.NewProductionConfig()
+	// Request diagnostics are accounting evidence. Zap's production sampler
+	// groups by message, so distinct request IDs can otherwise be dropped.
+	cfg.Sampling = nil
+	cfg.Level = zap.NewAtomicLevel()
+	verbose := false
+
+	switch level {
+	case "debug":
+		cfg.Level.SetLevel(zap.DebugLevel)
+		verbose = true
+	case "info":
+		cfg.Level.SetLevel(zap.InfoLevel)
+	case "warn":
+		cfg.Level.SetLevel(zap.WarnLevel)
+	case "error":
+		cfg.Level.SetLevel(zap.ErrorLevel)
+	default:
+		cfg.Level.SetLevel(zap.InfoLevel)
+	}
+
+	return cfg, verbose
 }
