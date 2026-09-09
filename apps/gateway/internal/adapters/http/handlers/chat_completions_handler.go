@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"sync"
@@ -14,6 +15,10 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 	"github.com/google/uuid"
 )
+
+// Bound the wait for usage after generation has finished, without extending
+// the lifetime of requests canceled before completion.
+const streamUsageDrainTimeout = 5 * time.Second
 
 // ChatCompletionsHandler handles POST /v1/chat/completions.
 type ChatCompletionsHandler struct {
@@ -68,13 +73,15 @@ func (h *ChatCompletionsHandler) Handle(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *ChatCompletionsHandler) handleStream(w http.ResponseWriter, r *http.Request, genReq domain.GenerateRequest, token string) {
-	stream, model, err := h.service.ExecuteStream(r.Context(), genReq, token)
+	ctx, cancelUpstream := context.WithCancel(r.Context())
+	defer cancelUpstream()
+	stream, model, err := h.service.ExecuteStream(ctx, genReq, token)
 	if err != nil {
 		WriteErrorWithLog(w, r, h.logger, err)
 		return
 	}
 	defer stream.Close()
-	h.writeStream(w, r, genReq, stream, model)
+	h.writeStream(w, r, genReq, stream, model, cancelUpstream)
 }
 
 func (h *ChatCompletionsHandler) writeStream(
@@ -83,6 +90,7 @@ func (h *ChatCompletionsHandler) writeStream(
 	genReq domain.GenerateRequest,
 	stream ports.GenerationStream,
 	model *domain.PublicModel,
+	cancelUpstream context.CancelFunc,
 ) {
 	responseModelID := genReq.PublicModelID
 	if model != nil {
@@ -137,23 +145,48 @@ func (h *ChatCompletionsHandler) writeStream(
 			responseID = event.ProviderResponseID
 		}
 
+		// Clients may close on finish_reason as well as [DONE]. Keep both
+		// signals back until metering has consumed trailing usage and settled
+		// the request. Canceling the upstream context safely unblocks reads
+		// if a provider never terminates its post-completion stream.
+		if event.Type == domain.StreamEventCompleted {
+			requestID := middleware.GetRequestID(r.Context())
+			providerID := responseID
+			timer := time.AfterFunc(streamUsageDrainTimeout, func() {
+				h.logger.Warn("stream finalization timeout", "request_id", requestID, "provider_request_id", providerID, "model", responseModelID, "timeout_ms", streamUsageDrainTimeout.Milliseconds())
+				cancelUpstream()
+			})
+			for {
+				tail, err := stream.Recv()
+				if err != nil {
+					break
+				}
+				if tail.Usage != nil {
+					event.Usage = tail.Usage
+				}
+				if tail.FinishReason != nil {
+					event.FinishReason = tail.FinishReason
+				}
+			}
+			timer.Stop()
+		}
 		chunk, done := mapper.DomainStreamEventToChatChunk(event, responseModelID, responseID, createdAt)
 		if chunk != nil {
 			writeMu.Lock()
-			sw.WriteData(chunk)
+			writeErr := sw.WriteData(chunk)
 			writeMu.Unlock()
+			if writeErr != nil {
+				h.logger.Warn("stream client write failed", "request_id", middleware.GetRequestID(r.Context()), "provider_request_id", responseID, "phase", "chunk", "write_failed", true)
+			}
 		}
 		if done {
 			writeMu.Lock()
-			sw.WriteDone()
+			writeErr := sw.WriteDone()
 			writeMu.Unlock()
-			// Keep draining so the usage-tracking wrapper can accumulate
-			// the final usage chunk before io.EOF triggers recording.
-			for {
-				if _, err := stream.Recv(); err != nil {
-					break
-				}
+			if writeErr != nil {
+				h.logger.Warn("stream client write failed", "request_id", middleware.GetRequestID(r.Context()), "provider_request_id", responseID, "phase", "done", "write_failed", true)
 			}
+			h.logger.Debug("stream completion sent", "request_id", middleware.GetRequestID(r.Context()), "provider_request_id", responseID, "done_write_failed", writeErr != nil, "client_context_canceled", r.Context().Err() != nil)
 			break
 		}
 	}

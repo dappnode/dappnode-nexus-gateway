@@ -114,7 +114,9 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req domain.GenerateRequest
 	invalidTraceSameBodyRetries := 0
 	serverOverloadRetries := 0
 	downgradeRetried := false
+	attempts := 0
 	for attempt := 1; ; attempt++ {
+		attempts = attempt
 		a.logProviderRequest(ctx, model, activeBuilt, attempt, retryReason)
 		streamResp, err = a.client.DoStream(ctx, model.ProviderConfig.BaseURL, apiKey, activeBuilt.Body)
 		if err == nil {
@@ -150,7 +152,7 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req domain.GenerateRequest
 		return nil, withProviderPolicyMeta(mapProviderErrorWithCompatibilityContext(err, model, activeBuilt.Body), activeBuilt, attempt, retryReason)
 	}
 
-	return NewStream(streamResp, model.ProviderConfig.ProviderName), nil
+	return NewStream(streamResp, model.ProviderConfig.ProviderName).WithDiagnostics(ctx, a.logger, model, attempts), nil
 }
 
 func missingProviderCredentialError(providerName string) *domain.GatewayError {

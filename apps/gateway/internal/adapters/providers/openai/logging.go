@@ -2,7 +2,6 @@ package openai
 
 import (
 	"context"
-	"sort"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
@@ -34,24 +33,14 @@ func (a *Adapter) logProviderRequest(ctx context.Context, model domain.PublicMod
 }
 
 func summarizeProviderBody(body map[string]any) map[string]any {
-	summary := map[string]any{
-		"fields": sortedKeys(body),
+	// Only fixed keys and numeric/boolean settings: arbitrary strings can contain prompts.
+	summary := map[string]any{}
+	for _, key := range []string{"stream", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "seed", "logprobs", "top_logprobs", "parallel_tool_calls", "store"} {
+		switch value := body[key].(type) {
+		case bool, int, int32, int64, float32, float64:
+			summary[key] = value
+		}
 	}
-	copyScalar(summary, body, "model")
-	copyScalar(summary, body, "stream")
-	copyScalar(summary, body, "max_tokens")
-	copyScalar(summary, body, "max_completion_tokens")
-	copyScalar(summary, body, "temperature")
-	copyScalar(summary, body, "top_p")
-	copyScalar(summary, body, "stop")
-	copyScalar(summary, body, "presence_penalty")
-	copyScalar(summary, body, "frequency_penalty")
-	copyScalar(summary, body, "seed")
-	copyScalar(summary, body, "logprobs")
-	copyScalar(summary, body, "top_logprobs")
-	copyScalar(summary, body, "parallel_tool_calls")
-	copyScalar(summary, body, "store")
-	copyScalar(summary, body, "service_tier")
 	if _, ok := body["user"]; ok {
 		summary["user"] = "[redacted]"
 	}
@@ -62,35 +51,13 @@ func summarizeProviderBody(body map[string]any) map[string]any {
 	}
 	if tools, ok := body["tools"].([]map[string]any); ok {
 		summary["tool_count"] = len(tools)
-		summary["tool_names"] = summarizeToolNames(tools)
-	}
-	if toolChoice, ok := body["tool_choice"]; ok {
-		summary["tool_choice"] = summarizeToolChoice(toolChoice)
-	}
-	if responseFormat, ok := body["response_format"].(map[string]any); ok {
-		if formatType, ok := responseFormat["type"].(string); ok {
-			summary["response_format"] = formatType
-		}
 	}
 	if streamOptions, ok := body["stream_options"].(map[string]any); ok {
-		summary["stream_options"] = streamOptions
+		if includeUsage, ok := streamOptions["include_usage"].(bool); ok {
+			summary["stream_options"] = map[string]any{"include_usage": includeUsage}
+		}
 	}
 	return summary
-}
-
-func copyScalar(summary, body map[string]any, key string) {
-	if v, ok := body[key]; ok {
-		summary[key] = v
-	}
-}
-
-func sortedKeys(body map[string]any) []string {
-	keys := make([]string, 0, len(body))
-	for k := range body {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func summarizeMessages(messages []map[string]any) []map[string]any {
@@ -106,7 +73,12 @@ func summarizeMessages(messages []map[string]any) []map[string]any {
 		}
 		item := map[string]any{}
 		if role, ok := msg["role"].(string); ok {
-			item["role"] = role
+			switch role {
+			case "system", "developer", "user", "assistant", "tool", "function":
+				item["role"] = role
+			default:
+				item["role"] = "unknown"
+			}
 		}
 		if content, ok := msg["content"].(string); ok {
 			item["content_chars"] = len(content)
@@ -115,7 +87,6 @@ func summarizeMessages(messages []map[string]any) []map[string]any {
 		}
 		if toolCalls, ok := msg["tool_calls"].([]map[string]any); ok {
 			item["tool_call_count"] = len(toolCalls)
-			item["tool_call_names"] = summarizeToolCallNames(toolCalls)
 		}
 		if reasoningContent, ok := msg["reasoning_content"].(string); ok {
 			item["reasoning_content_chars"] = len(reasoningContent)
@@ -138,42 +109,4 @@ func totalMessageContentChars(messages []map[string]any) int {
 		}
 	}
 	return total
-}
-
-func summarizeToolNames(tools []map[string]any) []string {
-	names := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		fn, _ := tool["function"].(map[string]any)
-		if name, ok := fn["name"].(string); ok {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-func summarizeToolCallNames(toolCalls []map[string]any) []string {
-	names := make([]string, 0, len(toolCalls))
-	for _, toolCall := range toolCalls {
-		fn, _ := toolCall["function"].(map[string]any)
-		if name, ok := fn["name"].(string); ok {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-func summarizeToolChoice(toolChoice any) any {
-	switch v := toolChoice.(type) {
-	case string:
-		return v
-	case map[string]any:
-		fn, _ := v["function"].(map[string]any)
-		name, _ := fn["name"].(string)
-		return map[string]any{
-			"type":          v["type"],
-			"function_name": name,
-		}
-	default:
-		return "[present]"
-	}
 }

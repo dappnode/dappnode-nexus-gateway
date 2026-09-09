@@ -109,7 +109,7 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req domain.GenerateRequest
 	}
 
 	return &Stream{
-		inner: openai.NewStream(resp, providerName),
+		inner: openai.NewStream(resp, providerName).WithDiagnostics(ctx, a.logger, model, 1),
 		proof: proof,
 	}, nil
 }
