@@ -32,10 +32,12 @@ func (l *streamLogRecorder) Error(m string, f ...any) { l.add("error", m, f...) 
 
 type failingLogMeter struct {
 	stubUsageMeter
-	err error
+	err      error
+	deadline time.Time
 }
 
 func (m *failingLogMeter) RecordSuccess(ctx context.Context, id string, a domain.AuthContext, endpoint string, req domain.GenerateRequest, result domain.GenerateResult, model domain.PublicModel, latency int64) error {
+	m.deadline, _ = ctx.Deadline()
 	m.stubUsageMeter.RecordSuccess(ctx, id, a, endpoint, req, result, model, latency)
 	return m.err
 }
@@ -94,8 +96,13 @@ func TestStreamLogging_UsageAndMeteringOutcomes(t *testing.T) {
 				if meter.failureCalls != 1 || meter.successCalls != 0 {
 					t.Fatal("logging changed failure accounting")
 				}
-			} else if meter.successCalls != 1 {
-				t.Fatal("logging changed completion accounting")
+			} else {
+				if meter.successCalls != 1 {
+					t.Fatal("logging changed completion accounting")
+				}
+				if remaining := time.Until(meter.deadline); meter.deadline.IsZero() || remaining <= 0 || remaining > StreamFinalizationTimeout {
+					t.Fatalf("metering deadline is not bounded by finalization: %v", meter.deadline)
+				}
 			}
 		})
 	}

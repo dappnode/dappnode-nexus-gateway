@@ -18,7 +18,7 @@ import (
 
 // Bound the wait for usage after generation has finished, without extending
 // the lifetime of requests canceled before completion.
-const streamUsageDrainTimeout = 5 * time.Second
+const streamUsageDrainTimeout = services.StreamFinalizationTimeout
 
 // ChatCompletionsHandler handles POST /v1/chat/completions.
 type ChatCompletionsHandler struct {
