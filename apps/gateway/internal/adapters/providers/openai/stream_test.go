@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -8,6 +9,30 @@ import (
 
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
+
+func TestStream_PreservesUsageOnEveryDeltaShape(t *testing.T) {
+	for name, delta := range map[string]string{
+		"text":             `{"content":"hello"}`,
+		"role":             `{"role":"assistant"}`,
+		"tool":             `{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]}`,
+		"hidden reasoning": `{"reasoning_content":"thinking"}`,
+		"empty":            `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var chunk chatCompletionChunk
+			if err := json.Unmarshal([]byte(`{"choices":[{"delta":`+delta+`,"finish_reason":null}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`), &chunk); err != nil {
+				t.Fatal(err)
+			}
+			events := mapChunkToStreamEvents(chunk)
+			if len(events) == 0 || events[0].Usage == nil || events[0].Usage.PromptTokens != 100 || events[0].Usage.CompletionTokens != 20 {
+				t.Fatalf("usage lost: %+v", events)
+			}
+			if events[0].Type == domain.StreamEventCompleted {
+				t.Fatal("usage on a non-final delta must not signal completion")
+			}
+		})
+	}
+}
 
 type fakeBody struct {
 	*strings.Reader

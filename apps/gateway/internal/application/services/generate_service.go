@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
+	"github.com/dappnode/dappnode-nexus-gateway/pkg/observability/logfields"
 	"github.com/google/uuid"
 )
 
@@ -122,7 +124,7 @@ func (s *GenerateService) Execute(ctx context.Context, endpoint string, req doma
 		"model", execReq.PublicModelID,
 		"provider", executionModel.ProviderConfig.ProviderName,
 		"latency_ms", latencyMs,
-		"finish_reason", result.FinishReason,
+		"finish_reason", logfields.FinishReason(result.FinishReason),
 		"gateway_status", 200,
 		"upstream_status", 200,
 	)
@@ -135,7 +137,7 @@ func (s *GenerateService) Execute(ctx context.Context, endpoint string, req doma
 			"request_id", requestID,
 			"reservation_id", reservationID,
 			"account_id", authCtx.Account.ID,
-			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
 		)
 	}
 
@@ -321,7 +323,7 @@ func (s *GenerateService) logFallback(requestID string, primary, fallback domain
 		"provider_model", primary.UpstreamModelName,
 		"fallback_provider", fallback.ProviderConfig.ProviderName,
 		"fallback_provider_model", fallback.UpstreamModelName,
-		"error", err,
+		"error_type", fmt.Sprintf("%T", err),
 	)
 }
 
@@ -509,18 +511,28 @@ type usageTrackingStream struct {
 	finishReason       *string
 	providerResponseID string
 	finished           bool
+	endReason          string
 }
 
 func (s *usageTrackingStream) Recv() (domain.StreamEvent, error) {
 	event, err := s.inner.Recv()
 	if err != nil {
+		s.endReason = "read_error"
+		if errors.Is(err, context.Canceled) {
+			s.endReason = "canceled"
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			s.endReason = "deadline_exceeded"
+		}
 		if err == io.EOF {
+			s.endReason = "eof"
 			s.recordCompletion(nil)
 			return event, err
 		}
 		// If the model already sent a finish reason, treat post-completion
 		// errors (e.g. context canceled after client disconnect) as success.
 		if s.finishReason != nil {
+			s.service.logger.Warn("stream interrupted after finish", s.logFields()...)
 			s.recordCompletion(nil)
 			return event, io.EOF
 		}
@@ -542,6 +554,7 @@ func (s *usageTrackingStream) Recv() (domain.StreamEvent, error) {
 	}
 
 	if event.Type == domain.StreamEventError {
+		s.endReason = "provider_error_event"
 		var gwErr error
 		if event.Error != nil {
 			gwErr = event.Error
@@ -554,6 +567,7 @@ func (s *usageTrackingStream) Recv() (domain.StreamEvent, error) {
 
 func (s *usageTrackingStream) Close() error {
 	if !s.finished {
+		s.endReason = "closed_before_eof"
 		s.recordCompletion(context.Canceled)
 	}
 	return s.inner.Close()
@@ -569,6 +583,11 @@ func (s *usageTrackingStream) recordCompletion(err error) {
 	if err != nil {
 		err = sanitizeErrorWithPIIMapping(err, s.piiMapping)
 		fields := s.service.buildErrorLogFields(ctx, s.requestID, &s.authCtx, s.endpoint, s.req.PublicModelID, s.model, err, latencyMs)
+		fields = append(fields,
+			"reservation_id", s.reservationID, "provider_request_id", s.providerResponseID,
+			"stream", true, "stream_end", s.endReason, "finish_reason", logfields.FinishReason(s.finishReason),
+			"usage_received", s.lastUsage != nil, "usage", s.lastUsage,
+			"context_canceled", errors.Is(s.ctx.Err(), context.Canceled))
 		s.service.logger.Error("stream error", fields...)
 		s.service.recordGeneration(metrics.OutcomeError, s.endpoint, s.req, s.model, latencyMs)
 		s.service.recordFailure(ctx, &s.reservationID, &s.authCtx, s.endpoint, &s.req, &s.model, err, s.lastUsage, latencyMs)
@@ -588,25 +607,31 @@ func (s *usageTrackingStream) recordCompletion(err error) {
 	}
 	s.service.storeTinfoilProof(ctx, s.authCtx, s.model, result)
 	metrics.RecordUsage(s.lastUsage, s.req.PublicModelID, s.model.ProviderConfig.ProviderName)
+	if s.lastUsage == nil {
+		s.service.logger.Warn("stream completed without usage", s.logFields()...)
+	}
 	s.service.recordGeneration(metrics.OutcomeSuccess, s.endpoint, s.req, s.model, latencyMs)
-	s.service.logger.Info("generation completed",
-		"request_id", s.requestID,
-		"account_id", s.authCtx.Account.ID,
-		"endpoint", s.endpoint,
-		"model", s.req.PublicModelID,
-		"provider", s.model.ProviderConfig.ProviderName,
-		"latency_ms", latencyMs,
-		"finish_reason", s.finishReason,
-		"gateway_status", 200,
-		"upstream_status", 200,
-	)
+	fields := append(s.logFields(), "gateway_status", 200, "upstream_status", 200)
+	s.service.logger.Info("generation completed", fields...)
 	if recErr := s.service.metering.RecordSuccess(ctx, s.reservationID, s.authCtx, s.endpoint, s.req, result, s.model, latencyMs); recErr != nil {
-		s.service.logger.Error("failed to record stream usage",
-			"request_id", s.requestID,
-			"reservation_id", s.reservationID,
-			"account_id", s.authCtx.Account.ID,
-			"error", recErr,
-		)
+		fields = append(s.logFields(), "metering_status", "failed", "error_type", fmt.Sprintf("%T", recErr))
+		s.service.logger.Error("failed to record stream usage", fields...)
+	} else {
+		fields = append(s.logFields(), "metering_status", "accepted")
+		s.service.logger.Info("stream metering completed", fields...)
+	}
+}
+
+// Keep unknown usage as null, rather than presenting it as a zero-token request.
+func (s *usageTrackingStream) logFields() []any {
+	return []any{
+		"request_id", s.requestID, "reservation_id", s.reservationID, "provider_request_id", s.providerResponseID,
+		"account_id", s.authCtx.Account.ID, "endpoint", s.endpoint, "model", s.req.PublicModelID,
+		"provider", s.model.ProviderConfig.ProviderName, "provider_model", s.model.UpstreamModelName,
+		"stream", true, "stream_end", s.endReason, "finish_reason", logfields.FinishReason(s.finishReason),
+		"usage_received", s.lastUsage != nil, "usage", s.lastUsage,
+		"context_canceled", errors.Is(s.ctx.Err(), context.Canceled),
+		"latency_ms", time.Since(s.start).Milliseconds(),
 	}
 }
 
@@ -620,7 +645,7 @@ func (s *GenerateService) recordFailure(ctx context.Context, reservationID *stri
 		ctx = context.WithoutCancel(ctx)
 	}
 	if recErr := s.metering.RecordFailure(ctx, reservationID, auth, endpoint, req, model, err, partialUsage, latencyMs); recErr != nil && s.logger != nil {
-		fields := []any{"error", recErr}
+		fields := []any{"error_type", fmt.Sprintf("%T", recErr)}
 		if auth != nil {
 			fields = append(fields, "account_id", auth.Account.ID)
 		}
@@ -660,7 +685,7 @@ func (s *GenerateService) recordTerminalOutcome(outcome, endpoint string, req do
 }
 
 // buildErrorLogFields builds a structured log field slice for error conditions,
-// including request context, provider details, and any upstream error metadata.
+// including request context, provider details, and numeric upstream status, never error messages or arbitrary metadata.
 func (s *GenerateService) buildErrorLogFields(ctx context.Context, requestID string, authCtx *domain.AuthContext, endpoint, publicModelID string, model domain.PublicModel, err error, latencyMs int64) []any {
 	fields := []any{
 		"request_id", requestID,
@@ -669,7 +694,7 @@ func (s *GenerateService) buildErrorLogFields(ctx context.Context, requestID str
 		"provider", model.ProviderConfig.ProviderName,
 		"provider_model", model.UpstreamModelName,
 		"latency_ms", latencyMs,
-		"error", err.Error(),
+		"error_type", fmt.Sprintf("%T", err),
 	}
 	if authCtx != nil {
 		fields = append(fields, "account_id", authCtx.Account.ID)
@@ -679,7 +704,10 @@ func (s *GenerateService) buildErrorLogFields(ctx context.Context, requestID str
 	if errors.As(err, &gwErr) {
 		fields = append(fields, "error_code", gwErr.Code)
 		fields = append(fields, "gateway_status", gwErr.HTTPStatus)
-		fields = append(fields, gwErr.LogFields()...)
+		// Upstream messages and arbitrary metadata may echo request contents.
+		if status, ok := gwErr.Metadata["upstream_status"].(int); ok {
+			fields = append(fields, "upstream_status", status)
+		}
 	}
 	return fields
 }
@@ -724,7 +752,7 @@ func (s *GenerateService) storeTinfoilProof(ctx context.Context, auth domain.Aut
 			"provider", model.ProviderConfig.ProviderName,
 			"model", model.PublicModelID,
 			"provider_response_id", proof.ProviderResponseID,
-			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
 		)
 	}
 }

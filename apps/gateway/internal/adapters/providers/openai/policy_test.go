@@ -576,8 +576,8 @@ func TestSummarizeProviderBodyRedactsPromptTextUserAndToolSchema(t *testing.T) {
 	if !strings.Contains(got, `"content_chars":18`) {
 		t.Fatalf("summary = %s, want content length", got)
 	}
-	if !strings.Contains(got, `"tool_names":["lookup"]`) {
-		t.Fatalf("summary = %s, want tool name only", got)
+	if !strings.Contains(got, `"tool_count":1`) {
+		t.Fatalf("summary = %s, want tool count only", got)
 	}
 }
 
@@ -630,4 +630,26 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestProviderSummaryOmitsFreeformFields(t *testing.T) {
+	const secret = "PRIVATE-PROMPT-CANARY"
+	body := map[string]any{
+		secret: secret, "model": secret, "stop": []string{secret}, "temperature": secret,
+		"tool_choice":     map[string]any{"function": map[string]any{"name": secret}},
+		"response_format": map[string]any{"type": secret},
+		"stream_options":  map[string]any{"include_usage": true, secret: secret},
+		"messages":        []map[string]any{{"role": secret, "content": secret, "reasoning_content": secret, "tool_calls": []map[string]any{{"function": map[string]any{"name": secret, "arguments": secret}}}}},
+		"tools":           []map[string]any{{"function": map[string]any{"name": secret}}},
+	}
+	encoded, err := json.Marshal(summarizeProviderBody(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("private data leaked: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"include_usage":true`) {
+		t.Fatal("missing usage request metadata")
+	}
 }
