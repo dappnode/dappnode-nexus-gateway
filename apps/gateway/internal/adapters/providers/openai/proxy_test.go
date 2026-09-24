@@ -56,6 +56,41 @@ func TestPrepareProxyBody_ForwardsTheClientRequest(t *testing.T) {
 	}
 }
 
+func TestPrepareProxyBody_DoublewordServiceTier(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, tc := range []struct {
+			name       string
+			provider   string
+			configured *string
+			client     string
+			want       string
+			present    bool
+		}{
+			{name: "async", provider: "doubleword", configured: stringPtr(" flex "), client: "priority", want: "flex", present: true},
+			{name: "realtime", provider: "doubleword", client: "priority"},
+			{name: "other provider", provider: "openai", client: "priority", want: "priority", present: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				raw := `{"model":"public/model","messages":[],"service_tier":"` + tc.client + `"}`
+				body, _, err := PrepareProxyBody([]byte(raw), domain.PublicModel{
+					UpstreamModelName: "upstream",
+					ProviderConfig:    domain.ProviderConfig{ProviderName: tc.provider},
+					ServiceTier:       tc.configured,
+				}, stream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, ok := body["service_tier"]
+				if ok != tc.present || ok && got != tc.want {
+					t.Fatalf("service_tier = %v (present %v), want %q (present %v)", got, ok, tc.want, tc.present)
+				}
+			})
+		}
+	}
+}
+
+func stringPtr(value string) *string { return &value }
+
 func TestPrepareProxyBody_Edits(t *testing.T) {
 	t.Run("streams always report usage", func(t *testing.T) {
 		got := prepared(t, `{"messages":[],"stream":true,"stream_options":{"include_usage":false,"continuous_usage_stats":true}}`, "novita", true)

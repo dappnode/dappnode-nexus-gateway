@@ -330,6 +330,7 @@ func (m runtimePublicModel) toDomain() domain.PublicModel {
 		Description:                   m.Description,
 		ProviderModelID:               m.ProviderModelID,
 		UpstreamModelName:             m.UpstreamModelName,
+		ServiceTier:                   m.ServiceTier,
 		ProviderConfig:                m.ProviderConfig.toDomain(),
 		SupportsChatCompletions:       *m.SupportsChatCompletions,
 		SupportsChatCompletionsStream: *m.SupportsChatCompletionsStream,
@@ -349,6 +350,7 @@ func (m runtimePublicModel) toDomain() domain.PublicModel {
 		model.Fallback = &domain.ProviderTarget{
 			ProviderModelID:   m.Fallback.ProviderModelID,
 			UpstreamModelName: m.Fallback.UpstreamModelName,
+			ServiceTier:       m.Fallback.ServiceTier,
 			ProviderConfig:    m.Fallback.ProviderConfig.toDomain(),
 		}
 	}
@@ -418,6 +420,7 @@ type runtimePublicModel struct {
 	Description                          *string                `json:"description,omitempty"`
 	ProviderModelID                      string                 `json:"provider_model_id"`
 	UpstreamModelName                    string                 `json:"upstream_model_name"`
+	ServiceTier                          *string                `json:"service_tier,omitempty"`
 	ProviderConfig                       runtimeProviderConfig  `json:"provider_config"`
 	Fallback                             *runtimeProviderTarget `json:"fallback,omitempty"`
 	SupportsChatCompletions              *bool                  `json:"supports_chat_completions"`
@@ -440,6 +443,7 @@ type runtimePublicModel struct {
 type runtimeProviderTarget struct {
 	ProviderModelID   string                `json:"provider_model_id"`
 	UpstreamModelName string                `json:"upstream_model_name"`
+	ServiceTier       *string               `json:"service_tier,omitempty"`
 	ProviderConfig    runtimeProviderConfig `json:"provider_config"`
 }
 

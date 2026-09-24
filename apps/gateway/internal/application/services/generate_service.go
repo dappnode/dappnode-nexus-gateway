@@ -81,6 +81,7 @@ func shouldTryFallback(ctx context.Context, err error, fallback *domain.Provider
 func withProviderTarget(model domain.PublicModel, target domain.ProviderTarget) domain.PublicModel {
 	model.ProviderModelID = target.ProviderModelID
 	model.UpstreamModelName = target.UpstreamModelName
+	model.ServiceTier = target.ServiceTier
 	model.ProviderConfig = target.ProviderConfig
 	model.Fallback = nil
 	return model
@@ -200,6 +201,10 @@ func (s *GenerateService) validateRequest(endpoint string, req domain.GenerateRe
 
 	if req.StructuredOutput && !model.SupportsStructuredOutput {
 		return domain.ErrUnsupportedFeature("structured_output")
+	}
+
+	if strings.EqualFold(model.ProviderConfig.ProviderName, "doubleword") && req.ServiceTier != nil {
+		return domain.ErrInvalidField("service_tier is fixed by the selected Doubleword model")
 	}
 
 	if model.EffectiveProofMode() == domain.ProofModeTinfoilAttestedTransport &&
