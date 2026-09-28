@@ -2,6 +2,8 @@ package openai
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,19 +12,38 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
 
-// Stream reads SSE events from an OpenAI-compatible streaming response.
+// maxSSELine bounds one SSE line. Providers that do not stream tool
+// arguments send a whole call (for example a large file) in one line.
+const maxSSELine = 16 << 20
+
+// Stream reads SSE events from an OpenAI-compatible streaming response and
+// normalizes them, so every client sees the same well-formed shape whatever
+// the provider sends:
+//
+//   - every tool call in a chunk is forwarded, not only the first;
+//   - each tool call gets contiguous indexes, one id (synthesized if the
+//     provider omits it), and its id and name only once;
+//   - a call that received no arguments gets "{}";
+//   - text in a chunk that also carries tool calls is kept;
+//   - a usage-only chunk before the finish reason does not end the stream;
+//   - a stream that ends without a finish reason gets one, while a stream with
+//     no chunk at all or an error payload is reported as a provider error.
 type Stream struct {
 	diagnostics             *streamDiagnostics
 	resp                    *http.Response
 	scanner                 *bufio.Scanner
-	done                    bool
+	done                    bool // upstream fully read
 	includeReasoningContent bool
-	deferredCompleted       *domain.StreamEvent // stashed when tool-call delta + finish_reason arrive in one chunk
+	pending                 []domain.StreamEvent
+	tools                   toolCallNormalizer
+	completed               bool // a finish reason was forwarded
+	sawChunk                bool
+	lastUsage               *domain.Usage
 }
 
 func NewStream(resp *http.Response, providerName ...string) *Stream {
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxSSELine)
 	includeReasoningContent := len(providerName) > 0 && providerName[0] == "deepseek"
 	return &Stream{
 		resp:                    resp,
@@ -32,38 +53,43 @@ func NewStream(resp *http.Response, providerName ...string) *Stream {
 }
 
 func (s *Stream) Recv() (domain.StreamEvent, error) {
-	if s.done {
-		return domain.StreamEvent{}, io.EOF
+	for len(s.pending) == 0 {
+		if s.done {
+			return domain.StreamEvent{}, io.EOF
+		}
+		events, err := s.read()
+		if err != nil {
+			return domain.StreamEvent{}, err
+		}
+		s.pending = events
 	}
+	event := s.pending[0]
+	s.pending = s.pending[1:]
+	return event, nil
+}
 
-	// Return a stashed completion event from a previous chunk that carried
-	// both a tool-call delta and a finish_reason.
-	if s.deferredCompleted != nil {
-		event := *s.deferredCompleted
-		s.deferredCompleted = nil
-		return event, nil
-	}
-
+// read consumes upstream lines until they produce events or the stream ends.
+func (s *Stream) read() ([]domain.StreamEvent, error) {
 	for s.scanner.Scan() {
 		line := s.scanner.Text()
-
 		if line == "" {
 			continue
 		}
-
-		if !strings.HasPrefix(line, "data: ") {
-			if s.diagnostics != nil && strings.HasPrefix(line, "data:") {
+		// SSE allows "data:" with or without a following space.
+		data, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			if s.diagnostics != nil && !isSSEField(line) {
 				s.diagnostics.unsupported++
 			}
 			continue
 		}
-
-		data := strings.TrimPrefix(line, "data: ")
-
+		data = strings.TrimPrefix(data, " ")
+		if data == "" {
+			continue
+		}
 		if data == "[DONE]" {
 			s.diagnostics.end("done_marker", nil)
-			s.done = true
-			return domain.StreamEvent{}, io.EOF
+			return s.end()
 		}
 
 		if s.diagnostics != nil {
@@ -76,45 +102,195 @@ func (s *Stream) Recv() (domain.StreamEvent, error) {
 			}
 			continue
 		}
+		s.sawChunk = true
 		if err := providerBaseResponseError(chunk.BaseResp); err != nil {
-			if s.diagnostics != nil {
-				s.diagnostics.observe(chunk, nil)
-			}
-			s.diagnostics.end("provider_error", err)
-			return domain.StreamEvent{}, err
+			return nil, s.fail(chunk, err)
 		}
-		events := mapChunkToStreamEvents(chunk, s.includeReasoningContent)
+		if err := providerStreamError(chunk.Error); err != nil {
+			return nil, s.fail(chunk, err)
+		}
+		events := s.normalize(mapChunkToStreamEvents(chunk, s.includeReasoningContent))
 		if s.diagnostics != nil {
 			s.diagnostics.observe(chunk, events)
-		}
-		if len(events) == 0 {
-			continue
 		}
 		for i := range events {
 			events[i].ProviderResponseID = chunk.ID
 		}
-		// If the mapper produced two events (tool-call delta + completed),
-		// return the first now and stash the second for the next Recv().
-		if len(events) > 1 {
-			s.deferredCompleted = &events[1]
+		if len(events) > 0 {
+			return events, nil
 		}
-		return events[0], nil
 	}
 
 	if err := s.scanner.Err(); err != nil {
 		s.diagnostics.end("read_error", err)
-		return domain.StreamEvent{}, err
+		return nil, err
 	}
-
 	s.diagnostics.end("eof", nil)
+	return s.end()
+}
+
+// isSSEField reports SSE lines other than data: comments, event, id, retry.
+func isSSEField(line string) bool {
+	return strings.HasPrefix(line, ":") || strings.HasPrefix(line, "event:") ||
+		strings.HasPrefix(line, "id:") || strings.HasPrefix(line, "retry:")
+}
+
+func (s *Stream) fail(chunk chatCompletionChunk, err error) error {
+	if s.diagnostics != nil {
+		s.diagnostics.observe(chunk, nil)
+	}
+	s.diagnostics.end("provider_error", err)
 	s.done = true
-	return domain.StreamEvent{}, io.EOF
+	return err
+}
+
+// end finishes a stream the provider closed. A response without any chunk is
+// a provider failure (so fallback can run); a response without a finish
+// reason gets one, so clients always see a complete message.
+func (s *Stream) end() ([]domain.StreamEvent, error) {
+	s.done = true
+	if !s.sawChunk {
+		return nil, domain.ErrProviderError(http.StatusBadGateway, "provider returned an empty stream")
+	}
+	if s.completed {
+		return nil, nil
+	}
+	finish := "stop"
+	return s.normalize([]domain.StreamEvent{{Type: domain.StreamEventCompleted, FinishReason: &finish, Usage: s.lastUsage}}), nil
+}
+
+// normalize applies the per-stream rules described on Stream.
+func (s *Stream) normalize(events []domain.StreamEvent) []domain.StreamEvent {
+	out := make([]domain.StreamEvent, 0, len(events)+1)
+	for _, event := range events {
+		if event.Usage != nil {
+			s.lastUsage = event.Usage
+		}
+		switch {
+		case event.ToolCallDelta != nil:
+			event.ToolCallDelta = s.tools.normalize(event.ToolCallDelta)
+			if event.ToolCallDelta == nil {
+				if event.Usage == nil {
+					continue
+				}
+				event.Type = domain.StreamEventOutputMessageDelta
+			}
+		case event.Type == domain.StreamEventCompleted && s.completed:
+			// Trailing usage after the finish reason.
+		case event.Type == domain.StreamEventCompleted && event.FinishReason == nil:
+			// Usage-only chunk before the model finished: not the end.
+			event.Type = domain.StreamEventOutputMessageDelta
+		case event.Type == domain.StreamEventCompleted:
+			out = append(out, s.tools.fillEmptyArguments()...)
+			if event.Usage == nil {
+				event.Usage = s.lastUsage // Usage sent before the finish reason.
+			}
+			if s.tools.seen() && *event.FinishReason == "stop" {
+				finish := "tool_calls"
+				event.FinishReason = &finish
+			}
+			s.completed = true
+		}
+		out = append(out, event)
+	}
+	return out
 }
 
 func (s *Stream) Close() error {
 	s.diagnostics.end("closed", nil)
 	s.done = true
 	return s.resp.Body.Close()
+}
+
+// toolCallNormalizer turns provider tool-call fragments into the OpenAI shape:
+// indexes 0..n-1 in order of appearance, the id, type, and name on the first
+// fragment only, and arguments as they stream. Providers differ: some pack
+// several calls in one chunk, some repeat the id and name on every fragment,
+// some reuse index 0 for every call with distinct ids, and some omit the id.
+type toolCallNormalizer struct {
+	byIndex map[int]*toolCallSlot
+	slots   []*toolCallSlot
+}
+
+type toolCallSlot struct {
+	index     int
+	id, name  string
+	arguments int
+}
+
+func (n *toolCallNormalizer) seen() bool { return len(n.slots) > 0 }
+
+func (n *toolCallNormalizer) normalize(in *domain.ToolCallDelta) *domain.ToolCallDelta {
+	if n.byIndex == nil {
+		n.byIndex = map[int]*toolCallSlot{}
+	}
+	id := ""
+	if in.ID != nil {
+		id = *in.ID
+	}
+	slot := n.byIndex[in.Index]
+	if slot != nil && id != "" && id != slot.id {
+		slot = nil // A new call that reuses the index.
+	}
+	out := &domain.ToolCallDelta{}
+	if slot == nil {
+		slot = &toolCallSlot{index: len(n.slots), id: id}
+		if slot.id == "" {
+			slot.id = newToolCallID()
+		}
+		n.slots = append(n.slots, slot)
+		n.byIndex[in.Index] = slot
+		out.ID = &slot.id
+	}
+	out.Index = slot.index
+	if in.Name != nil && *in.Name != "" && *in.Name != slot.name {
+		name := *in.Name
+		if slot.name != "" {
+			if !strings.HasPrefix(name, slot.name) {
+				slot.name += name // Streamed in pieces.
+			} else {
+				name = strings.TrimPrefix(name, slot.name) // Repeated with more text.
+				slot.name += name
+			}
+		} else {
+			slot.name = name
+		}
+		if name != "" {
+			out.Name = &name
+		}
+	}
+	if in.ArgumentsDelta != nil && *in.ArgumentsDelta != "" {
+		arguments := *in.ArgumentsDelta
+		slot.arguments += len(arguments)
+		out.ArgumentsDelta = &arguments
+	}
+	if out.ID == nil && out.Name == nil && out.ArgumentsDelta == nil {
+		return nil
+	}
+	return out
+}
+
+// fillEmptyArguments gives calls that received no arguments "{}", which is
+// what OpenAI sends and what strict clients parse.
+func (n *toolCallNormalizer) fillEmptyArguments() []domain.StreamEvent {
+	var events []domain.StreamEvent
+	for _, slot := range n.slots {
+		if slot.arguments == 0 {
+			slot.arguments = 2
+			empty := "{}"
+			events = append(events, domain.StreamEvent{
+				Type:          domain.StreamEventToolCallDelta,
+				ToolCallDelta: &domain.ToolCallDelta{Index: slot.index, ArgumentsDelta: &empty},
+			})
+		}
+	}
+	return events
+}
+
+func newToolCallID() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return "call_" + hex.EncodeToString(b)
 }
 
 type chatCompletionChunk struct {
@@ -150,6 +326,30 @@ type chatCompletionChunk struct {
 		} `json:"prompt_tokens_details,omitempty"`
 	} `json:"usage,omitempty"`
 	BaseResp *providerBaseResponse `json:"base_resp,omitempty"`
+	Error    *providerStreamErr    `json:"error,omitempty"`
+}
+
+// providerStreamErr is an error some providers send as a data line after the
+// stream started (overload, context length, moderation).
+type providerStreamErr struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Code    any    `json:"code"`
+}
+
+func providerStreamError(e *providerStreamErr) error {
+	if e == nil {
+		return nil
+	}
+	message := strings.TrimSpace(e.Message)
+	if message == "" {
+		message = "provider stream failed"
+	}
+	return domain.ErrProviderError(http.StatusBadGateway, message).WithMeta(
+		"upstream_error_type", e.Type,
+		"upstream_code", e.Code,
+		"upstream_error", message,
+	)
 }
 
 type providerBaseResponse struct {
@@ -213,16 +413,11 @@ func mapChunkToStreamEvents(chunk chatCompletionChunk, includeReasoningContent .
 		}
 	}
 
-	// When a chunk carries both a tool-call delta AND a finish_reason (some
-	// providers, e.g. MiniMax, pack the final argument fragment and the
-	// finish signal into one chunk), we must emit the tool-call delta
-	// FIRST so the client receives the complete JSON arguments before the
-	// stream is marked done.
-	if choice.FinishReason != nil && len(choice.Delta.ToolCalls) > 0 {
-		tc := choice.Delta.ToolCalls[0]
-		tcd := &domain.ToolCallDelta{
-			Index: tc.Index,
-		}
+	// Every tool call in the chunk, in order. Some providers pack several
+	// calls, or a whole call, into one chunk.
+	toolEvents := make([]domain.StreamEvent, 0, len(choice.Delta.ToolCalls))
+	for _, tc := range choice.Delta.ToolCalls {
+		tcd := &domain.ToolCallDelta{Index: tc.Index}
 		if tc.ID != "" {
 			tcd.ID = &tc.ID
 		}
@@ -232,26 +427,39 @@ func mapChunkToStreamEvents(chunk chatCompletionChunk, includeReasoningContent .
 		if tc.Function.Arguments != "" {
 			tcd.ArgumentsDelta = &tc.Function.Arguments
 		}
+		toolEvents = append(toolEvents, domain.StreamEvent{Type: domain.StreamEventToolCallDelta, ToolCallDelta: tcd})
+	}
+	// Text that shares a chunk with tool calls comes first, as generated.
+	var text []domain.StreamEvent
+	if len(toolEvents) > 0 {
+		content := choice.Delta.Content != nil && *choice.Delta.Content != ""
+		reasoning := keepReasoning && choice.Delta.ReasoningContent != nil && *choice.Delta.ReasoningContent != ""
+		if content || reasoning {
+			event := domain.StreamEvent{Type: domain.StreamEventOutputTextDelta}
+			if content {
+				event.ContentDelta = choice.Delta.Content
+			}
+			if reasoning {
+				event.ReasoningDelta = choice.Delta.ReasoningContent
+			}
+			text = append(text, event)
+		}
+	}
+
+	// When a chunk carries tool-call deltas AND a finish_reason (e.g.
+	// MiniMax packs the final argument fragment and the finish signal into
+	// one chunk), the deltas go first so the client has complete arguments
+	// before the stream is marked done.
+	if choice.FinishReason != nil && len(toolEvents) > 0 {
 		completedEvent := domain.StreamEvent{
 			Type:         domain.StreamEventCompleted,
 			FinishReason: choice.FinishReason,
 		}
-		if choice.Delta.Content != nil && *choice.Delta.Content != "" {
-			completedEvent.ContentDelta = choice.Delta.Content
-		}
-		if keepReasoning && choice.Delta.ReasoningContent != nil && *choice.Delta.ReasoningContent != "" {
-			completedEvent.ReasoningDelta = choice.Delta.ReasoningContent
-		}
 		if chunk.Usage != nil {
 			completedEvent.Usage = chunkUsageToDomain(chunk.Usage)
 		}
-		return []domain.StreamEvent{
-			{
-				Type:          domain.StreamEventToolCallDelta,
-				ToolCallDelta: tcd,
-			},
-			completedEvent,
-		}
+		events = append(text, toolEvents...)
+		return append(events, completedEvent)
 	}
 
 	// Check for finish reason -> completed event
@@ -272,25 +480,8 @@ func mapChunkToStreamEvents(chunk chatCompletionChunk, includeReasoningContent .
 		return []domain.StreamEvent{event}
 	}
 
-	// Tool call delta
-	if len(choice.Delta.ToolCalls) > 0 {
-		tc := choice.Delta.ToolCalls[0]
-		tcd := &domain.ToolCallDelta{
-			Index: tc.Index,
-		}
-		if tc.ID != "" {
-			tcd.ID = &tc.ID
-		}
-		if tc.Function.Name != "" {
-			tcd.Name = &tc.Function.Name
-		}
-		if tc.Function.Arguments != "" {
-			tcd.ArgumentsDelta = &tc.Function.Arguments
-		}
-		return []domain.StreamEvent{{
-			Type:          domain.StreamEventToolCallDelta,
-			ToolCallDelta: tcd,
-		}}
+	if len(toolEvents) > 0 {
+		return append(text, toolEvents...)
 	}
 
 	// Text content delta

@@ -144,12 +144,43 @@ func (h *ChatCompletionsHandler) writeStream(
 		if event.ProviderResponseID != "" {
 			responseID = event.ProviderResponseID
 		}
+		if event.Type == domain.StreamEventError {
+			// A provider error after output started must not look like a
+			// complete response: no finish chunk and no [DONE].
+			message := "the provider stream failed"
+			if event.Error != nil {
+				message = event.Error.Error()
+			}
+			writeMu.Lock()
+			sw.WriteData(map[string]any{
+				"error": map[string]any{"type": "provider_error", "message": message},
+			})
+			writeMu.Unlock()
+			return
+		}
+		write := func(event domain.StreamEvent) {
+			chunk, _ := mapper.DomainStreamEventToChatChunk(event, responseModelID, responseID, createdAt)
+			if chunk == nil {
+				return
+			}
+			writeMu.Lock()
+			writeErr := sw.WriteData(chunk)
+			writeMu.Unlock()
+			if writeErr != nil {
+				h.logger.Warn("stream client write failed", "request_id", middleware.GetRequestID(r.Context()), "provider_request_id", responseID, "phase", "chunk", "write_failed", true)
+			}
+		}
 
 		// Clients may close on finish_reason as well as [DONE]. Keep both
 		// signals back until metering has consumed trailing usage and settled
 		// the request. Canceling the upstream context safely unblocks reads
 		// if a provider never terminates its post-completion stream.
 		if event.Type == domain.StreamEventCompleted {
+			// Output the finishing chunk carried goes out now; only the finish
+			// signal waits.
+			for _, delta := range splitDeltas(&event) {
+				write(delta)
+			}
 			requestID := middleware.GetRequestID(r.Context())
 			providerID := responseID
 			timer := time.AfterFunc(streamUsageDrainTimeout, func() {
@@ -166,6 +197,10 @@ func (h *ChatCompletionsHandler) writeStream(
 				}
 				if tail.FinishReason != nil {
 					event.FinishReason = tail.FinishReason
+				}
+				// Output after the finish reason is still the response.
+				for _, delta := range splitDeltas(&tail) {
+					write(delta)
 				}
 			}
 			timer.Stop()
@@ -190,4 +225,27 @@ func (h *ChatCompletionsHandler) writeStream(
 			break
 		}
 	}
+}
+
+// splitDeltas moves the text, reasoning, and tool-call output out of an event
+// into delta events of their own, leaving the rest (finish, usage) in place.
+func splitDeltas(event *domain.StreamEvent) []domain.StreamEvent {
+	var out []domain.StreamEvent
+	content := event.ContentDelta != nil && *event.ContentDelta != ""
+	reasoning := event.ReasoningDelta != nil && *event.ReasoningDelta != ""
+	if content || reasoning {
+		delta := domain.StreamEvent{Type: domain.StreamEventOutputTextDelta}
+		if content {
+			delta.ContentDelta = event.ContentDelta
+		}
+		if reasoning {
+			delta.ReasoningDelta = event.ReasoningDelta
+		}
+		out = append(out, delta)
+	}
+	if event.ToolCallDelta != nil {
+		out = append(out, domain.StreamEvent{Type: domain.StreamEventToolCallDelta, ToolCallDelta: event.ToolCallDelta})
+	}
+	event.ContentDelta, event.ReasoningDelta, event.ToolCallDelta = nil, nil, nil
+	return out
 }

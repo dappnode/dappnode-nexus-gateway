@@ -158,3 +158,41 @@ type finalizationLogRecorder struct {
 }
 
 func (l *finalizationLogRecorder) Warn(message string, _ ...any) { l.warnings <- message }
+
+func TestChatCompletionsHandler_ForwardsOutputAroundTheFinishReason(t *testing.T) {
+	finish, early, late, args := "tool_calls", "Reading.", "late text", "{}"
+	id, name := "call_1", "read"
+	stream := &handlerTestStream{events: []domain.StreamEvent{
+		{Type: domain.StreamEventCompleted, FinishReason: &finish, ContentDelta: &early},
+		{Type: domain.StreamEventToolCallDelta, ToolCallDelta: &domain.ToolCallDelta{Index: 0, ID: &id, Name: &name, ArgumentsDelta: &args}},
+		{Type: domain.StreamEventOutputTextDelta, ContentDelta: &late},
+	}}
+	recorder := httptest.NewRecorder()
+	handler := &ChatCompletionsHandler{logger: &confidentialTestLogger{}}
+	handler.writeStream(recorder, httptest.NewRequest("POST", "/v1/chat/completions", nil), domain.GenerateRequest{PublicModelID: "test"}, stream, nil, func() {})
+	body := recorder.Body.String()
+	order := []string{`"content":"Reading."`, `"id":"call_1"`, `"content":"late text"`, `"finish_reason":"tool_calls"`, "[DONE]"}
+	at := 0
+	for _, want := range order {
+		i := strings.Index(body[at:], want)
+		if i < 0 {
+			t.Fatalf("missing %s in order: %s", want, body)
+		}
+		at += i
+	}
+}
+
+func TestChatCompletionsHandler_ProviderErrorEventIsNotCompletion(t *testing.T) {
+	content := "partial"
+	stream := &handlerTestStream{events: []domain.StreamEvent{
+		{Type: domain.StreamEventOutputTextDelta, ContentDelta: &content},
+		{Type: domain.StreamEventError, Error: domain.ErrProviderError(502, "overloaded")},
+	}}
+	recorder := httptest.NewRecorder()
+	handler := &ChatCompletionsHandler{logger: &confidentialTestLogger{}}
+	handler.writeStream(recorder, httptest.NewRequest("POST", "/v1/chat/completions", nil), domain.GenerateRequest{PublicModelID: "test"}, stream, nil, func() {})
+	body := recorder.Body.String()
+	if strings.Contains(body, "[DONE]") || strings.Contains(body, `"finish_reason":"`) || !strings.Contains(body, `"error"`) {
+		t.Fatalf("error event reported as completion: %s", body)
+	}
+}

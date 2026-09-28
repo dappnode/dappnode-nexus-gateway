@@ -48,7 +48,8 @@ func TestStreamDiagnostics_TerminationAndUsage(t *testing.T) {
 		{name: "provider omission", data: finish + "data: [DONE]\n", end: "done_marker", level: "warn"},
 		{name: "bare eof", data: finish, end: "eof", level: "warn"},
 		{name: "malformed", data: finish + "data: {SECRET-MALFORMED}\n" + usage + "data: [DONE]\n", end: "done_marker", level: "warn", usage: true, malformed: 1},
-		{name: "unsupported framing", data: finish + "data:{SECRET-FRAMING}\n", end: "eof", level: "warn", unsupported: 1},
+		{name: "unsupported framing", data: finish + "{SECRET-FRAMING}\n", end: "eof", level: "warn", unsupported: 1},
+		{name: "data without space", data: finish + "data:{SECRET-FRAMING}\n", end: "eof", level: "warn", malformed: 1},
 		{name: "canceled", data: finish, end: "canceled", level: "warn", readErr: context.Canceled},
 		{name: "timeout", data: finish, end: "deadline_exceeded", level: "warn", readErr: context.DeadlineExceeded},
 	} {

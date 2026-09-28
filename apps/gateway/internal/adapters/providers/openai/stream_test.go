@@ -214,11 +214,15 @@ func TestStream_ReasoningContentIgnoredForNonDeepSeekProviders(t *testing.T) {
 func TestStream_MapsDeepSeekCacheHitTokens(t *testing.T) {
 	stream := newTestStream("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":9,\"total_tokens\":26,\"prompt_cache_hit_tokens\":7}}\n\n")
 
-	event, err := stream.Recv()
-	if err != nil {
-		t.Fatalf("Recv returned error: %v", err)
+	// A usage-only chunk is not the end; the stream's end is, with that usage.
+	var event domain.StreamEvent
+	for event.Type != domain.StreamEventCompleted {
+		var err error
+		if event, err = stream.Recv(); err != nil {
+			t.Fatalf("Recv returned error: %v", err)
+		}
 	}
-	if event.Type != domain.StreamEventCompleted || event.Usage == nil {
+	if event.Usage == nil || event.FinishReason == nil || *event.FinishReason != "stop" {
 		t.Fatalf("event = %+v, want completed event with usage", event)
 	}
 	if event.Usage.CacheReadTokens != 7 {
