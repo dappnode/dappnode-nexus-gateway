@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
@@ -185,7 +186,9 @@ type chunk struct {
 	ID      string  `json:"id"`
 	Model   *string `json:"model"`
 	Choices []struct {
+		Index *int `json:"index"`
 		Delta *struct {
+			Role             *string           `json:"role"`
 			Content          *string           `json:"content"`
 			ReasoningContent *string           `json:"reasoning_content"`
 			Reasoning        *string           `json:"reasoning"`
@@ -327,8 +330,12 @@ type ProxyStream struct {
 	// unmask restores PII placeholders, for keys that mask.
 	unmask *unmasker
 
-	o        outcome
-	sawDone  bool
+	o       outcome
+	sawDone bool
+	// roleSent records choices whose role was sent: some providers repeat
+	// it on every chunk, which clients that join fields (the OpenAI SDKs'
+	// stream helpers) turn into "assistantassistant...".
+	roleSent map[int]bool
 	finished bool // Metered.
 	chunks   int
 }
@@ -418,10 +425,53 @@ func (p *ProxyStream) observe(raw []byte) ([][]byte, *chunk) {
 		p.o.err = err
 	}
 	prefix := line[:len(line)-len(data)]
+	data = p.dropRepeatedRole(data, &c)
 	if p.unmask != nil && len(c.Choices) > 0 {
 		data = p.unmask.event(data)
 	}
 	return [][]byte{append(append([]byte(nil), prefix...), rewriteModel(data, &c, p.public)...)}, &c
+}
+
+// dropRepeatedRole removes a role the stream already sent for a choice, as
+// OpenAI sends it once. Events without a repeated role pass unchanged.
+func (p *ProxyStream) dropRepeatedRole(data []byte, c *chunk) []byte {
+	drop := map[string]bool{}
+	for pos, choice := range c.Choices {
+		if choice.Delta == nil || choice.Delta.Role == nil {
+			continue
+		}
+		index := pos
+		if choice.Index != nil {
+			index = *choice.Index
+		}
+		if p.roleSent[index] {
+			drop[strconv.Itoa(index)] = true
+			continue
+		}
+		if p.roleSent == nil {
+			p.roleSent = map[int]bool{}
+		}
+		p.roleSent[index] = true
+	}
+	if len(drop) == 0 {
+		return data
+	}
+	obj, err := decodeObject(data)
+	if err != nil {
+		return data
+	}
+	choices, _ := obj["choices"].([]any)
+	for pos, item := range choices {
+		choice, _ := item.(map[string]any)
+		if delta, ok := choice["delta"].(map[string]any); ok && drop[choiceIndex(choice["index"], pos)] {
+			delete(delta, "role")
+		}
+	}
+	out, err := marshalNoEscape(obj)
+	if err != nil {
+		return data
+	}
+	return out
 }
 
 // heldTail returns an event with PII-restored text still held back, if any.

@@ -221,3 +221,23 @@ func TestProxyStream_UnrequestedUsageIsMeteredNotForwarded(t *testing.T) {
 		t.Fatal("usage not metered")
 	}
 }
+
+// Some providers repeat "role" on every chunk; OpenAI sends it once, and the
+// OpenAI SDKs' stream helpers join repeated fields into "assistantassistant".
+func TestProxyStream_SendsRoleOncePerChoice(t *testing.T) {
+	first := `data: {"id":"c","choices":[{"index":0,"delta":{"role":"assistant","content":"a"},"finish_reason":null}]}`
+	body := first + "\n\n" +
+		`data: {"id":"c","choices":[{"index":0,"delta":{"role":"assistant","content":"b"},"finish_reason":null}]}` + "\n\n" +
+		`data: {"id":"c","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"t","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	meter := &resultMeter{}
+	svc := proxyService(meter, "", map[string]ports.Provider{"primary": &proxyStub{sse: body}}, false)
+	call, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), streamRequest(), "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := relayAll(t, call.Stream)
+	if strings.Count(got, `"role"`) != 1 || !strings.HasPrefix(got, first+"\n") || !strings.Contains(got, `"content":"b"`) || !strings.Contains(got, `"name":"f"`) {
+		t.Fatalf("stream %s", got)
+	}
+}
