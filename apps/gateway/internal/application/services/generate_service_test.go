@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
@@ -113,11 +114,11 @@ func (s *stubUsageMeter) RecordFailure(ctx context.Context, reservationID *strin
 
 type stubProviderRegistry struct {
 	provider  *stubProvider
-	providers map[string]ports.GenerationProvider
+	providers map[string]ports.Provider
 	err       error
 }
 
-func (s *stubProviderRegistry) GetProvider(name string) (ports.GenerationProvider, error) {
+func (s *stubProviderRegistry) GetProvider(name string) (ports.Provider, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -131,41 +132,52 @@ func (s *stubProviderRegistry) GetProvider(name string) (ports.GenerationProvide
 	return s.provider, nil
 }
 
+// stubProvider returns canned provider bodies.
 type stubProvider struct {
-	beforeReturn  func()
-	err           error
-	stream        ports.GenerationStream
-	streamErr     error
-	generateCalls int
-	streamCalls   int
+	beforeReturn func()
+	err          error
+	json         string // Complete's body; a short answer when empty.
+	sse          string // Stream's body.
+	calls        int
+	lastRaw      string
 }
 
-func (s *stubProvider) Generate(_ context.Context, req domain.GenerateRequest, model domain.PublicModel) (domain.GenerateResult, error) {
-	s.generateCalls++
+const stubAnswer = `{"id":"provider-response","model":"upstream","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
+
+func (s *stubProvider) Complete(_ context.Context, raw []byte, _ domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
+	s.calls++
+	s.lastRaw = string(raw)
 	if s.beforeReturn != nil {
 		s.beforeReturn()
 	}
 	if s.err != nil {
-		return domain.GenerateResult{}, s.err
+		return nil, nil, s.err
 	}
-	return domain.GenerateResult{
-		ID:              "provider-response",
-		PublicModelID:   req.PublicModelID,
-		ProviderName:    model.ProviderConfig.ProviderName,
-		ProviderModelID: model.ProviderModelID,
-	}, nil
+	if s.json == "" {
+		return []byte(stubAnswer), nil, nil
+	}
+	return []byte(s.json), nil, nil
 }
 
-func TestGenerateServiceExecute_FinalizesSuccessAfterRequestCancellation(t *testing.T) {
+func (s *stubProvider) Stream(_ context.Context, raw []byte, _ domain.PublicModel) (ports.ProviderStream, error) {
+	s.calls++
+	s.lastRaw = string(raw)
+	if s.err != nil {
+		return ports.ProviderStream{}, s.err
+	}
+	return ports.ProviderStream{Body: io.NopCloser(strings.NewReader(s.sse))}, nil
+}
+
+func TestProxy_FinalizesSuccessAfterRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), middleware.RequestIDKey, "client-request-id"))
 	meter := &stubUsageMeter{}
 	svc := newDirectModelGenerateService(meter, &stubProvider{beforeReturn: cancel})
 
-	_, _, err := svc.Execute(ctx, domain.EndpointChatCompletions, domain.GenerateRequest{
+	_, err := svc.Proxy(ctx, domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
 		PublicModelID: "model",
 	}, "sk-test")
 	if err != nil {
-		t.Fatalf("Execute returned error: %v", err)
+		t.Fatalf("Proxy returned error: %v", err)
 	}
 	if meter.successCalls != 1 || meter.lastReservationID != "reservation-1" {
 		t.Fatalf("success finalization = %d for %q, want one call for reservation-1", meter.successCalls, meter.lastReservationID)
@@ -181,7 +193,7 @@ func TestGenerateServiceExecute_FinalizesSuccessAfterRequestCancellation(t *test
 	}
 }
 
-func TestGenerateServiceExecute_ReleasesReservationAfterRequestCancellation(t *testing.T) {
+func TestProxy_ReleasesReservationAfterRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	meter := &stubUsageMeter{}
 	svc := newDirectModelGenerateService(meter, &stubProvider{
@@ -189,7 +201,7 @@ func TestGenerateServiceExecute_ReleasesReservationAfterRequestCancellation(t *t
 		err:          domain.ErrProviderUnavailable("openai"),
 	})
 
-	_, _, err := svc.Execute(ctx, domain.EndpointChatCompletions, domain.GenerateRequest{
+	_, err := svc.Proxy(ctx, domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
 		PublicModelID: "model",
 	}, "sk-test")
 	if err == nil {
@@ -203,136 +215,64 @@ func TestGenerateServiceExecute_ReleasesReservationAfterRequestCancellation(t *t
 	}
 }
 
-func TestGenerateServiceExecute_UsesConfiguredFallbackOnce(t *testing.T) {
+func TestProxy_UsesConfiguredFallbackOnce(t *testing.T) {
 	meter := &stubUsageMeter{}
 	primary := &stubProvider{err: domain.ErrProviderUnavailable("primary")}
 	fallback := &stubProvider{}
 	svc := newFallbackGenerateService(meter, primary, fallback)
 
-	result, _, err := svc.Execute(context.Background(), domain.EndpointChatCompletions, domain.GenerateRequest{
+	call, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
 		PublicModelID: "model",
 	}, "sk-test")
 	if err != nil {
-		t.Fatalf("Execute returned error: %v", err)
+		t.Fatalf("Proxy returned error: %v", err)
 	}
-	if primary.generateCalls != 1 || fallback.generateCalls != 1 {
-		t.Fatalf("generate calls = primary %d, fallback %d; want 1 each", primary.generateCalls, fallback.generateCalls)
+	if primary.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("generate calls = primary %d, fallback %d; want 1 each", primary.calls, fallback.calls)
 	}
 	if meter.reserveCalls != 1 || meter.successCalls != 1 || meter.failureCalls != 0 {
 		t.Fatalf("metering calls = reserve %d, success %d, failure %d", meter.reserveCalls, meter.successCalls, meter.failureCalls)
 	}
-	if result.ProviderName != "fallback" || result.ProviderModelID != "fallback-model" {
-		t.Fatalf("result target = %s/%s, want fallback/fallback-model", result.ProviderName, result.ProviderModelID)
+	if call.Model.ProviderConfig.ProviderName != "fallback" || call.Model.ProviderModelID != "fallback-model" {
+		t.Fatalf("result target = %s/%s, want fallback/fallback-model", call.Model.ProviderConfig.ProviderName, call.Model.ProviderModelID)
 	}
 	if meter.lastSuccessModel.ProviderConfig.ProviderName != "fallback" {
 		t.Fatalf("metered provider = %q, want fallback", meter.lastSuccessModel.ProviderConfig.ProviderName)
 	}
 }
 
-func TestGenerateServiceExecute_ReturnsFallbackFailure(t *testing.T) {
+func TestProxy_ReturnsFallbackFailure(t *testing.T) {
 	meter := &stubUsageMeter{}
 	primary := &stubProvider{err: domain.ErrProviderUnavailable("primary")}
 	fallbackErr := domain.ErrProviderTimeout("fallback")
 	fallback := &stubProvider{err: fallbackErr}
 	svc := newFallbackGenerateService(meter, primary, fallback)
 
-	_, _, err := svc.Execute(context.Background(), domain.EndpointChatCompletions, domain.GenerateRequest{
+	_, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
 		PublicModelID: "model",
 	}, "sk-test")
 	if err != fallbackErr {
 		t.Fatalf("error = %v, want fallback error %v", err, fallbackErr)
 	}
-	if primary.generateCalls != 1 || fallback.generateCalls != 1 || meter.failureCalls != 1 {
-		t.Fatalf("calls = primary %d, fallback %d, failures %d", primary.generateCalls, fallback.generateCalls, meter.failureCalls)
+	if primary.calls != 1 || fallback.calls != 1 || meter.failureCalls != 1 {
+		t.Fatalf("calls = primary %d, fallback %d, failures %d", primary.calls, fallback.calls, meter.failureCalls)
 	}
 }
 
-func TestGenerateServiceExecute_DoesNotFallbackAfterCancellation(t *testing.T) {
+func TestProxy_DoesNotFallbackAfterCancellation(t *testing.T) {
 	meter := &stubUsageMeter{}
 	primary := &stubProvider{err: domain.ErrClientCanceled()}
 	fallback := &stubProvider{}
 	svc := newFallbackGenerateService(meter, primary, fallback)
 
-	_, _, err := svc.Execute(context.Background(), domain.EndpointChatCompletions, domain.GenerateRequest{
+	_, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
 		PublicModelID: "model",
 	}, "sk-test")
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}
-	if fallback.generateCalls != 0 {
-		t.Fatalf("fallback calls = %d, want 0", fallback.generateCalls)
-	}
-}
-
-func TestGenerateServiceExecuteStream_FallsBackBeforeVisibleOutput(t *testing.T) {
-	role := "assistant"
-	content := "fallback answer"
-	finish := "stop"
-	primaryStream := &stubStream{steps: []streamStep{
-		{event: domain.StreamEvent{Type: domain.StreamEventOutputMessageDelta, Role: &role}},
-		{err: domain.ErrProviderUnavailable("primary")},
-	}}
-	fallbackStream := &stubStream{steps: []streamStep{
-		{event: domain.StreamEvent{Type: domain.StreamEventOutputTextDelta, ContentDelta: &content}},
-		{event: domain.StreamEvent{Type: domain.StreamEventCompleted, FinishReason: &finish}},
-	}}
-	meter := &stubUsageMeter{}
-	primary := &stubProvider{stream: primaryStream}
-	fallback := &stubProvider{stream: fallbackStream}
-	svc := newFallbackGenerateService(meter, primary, fallback)
-
-	stream, _, model, err := svc.ExecuteStream(context.Background(), domain.EndpointChatCompletions, domain.GenerateRequest{
-		PublicModelID: "model",
-		Stream:        true,
-	}, "sk-test")
-	if err != nil {
-		t.Fatalf("ExecuteStream returned error: %v", err)
-	}
-	if model.ProviderConfig.ProviderName != "fallback" || !primaryStream.closed {
-		t.Fatalf("selected provider = %q, primary closed = %v", model.ProviderConfig.ProviderName, primaryStream.closed)
-	}
-	event, err := stream.Recv()
-	if err != nil || event.ContentDelta == nil || *event.ContentDelta != content {
-		t.Fatalf("first event = %#v, err = %v; want fallback content", event, err)
-	}
-	for {
-		if _, err := stream.Recv(); err != nil {
-			if err != io.EOF {
-				t.Fatalf("drain stream: %v", err)
-			}
-			break
-		}
-	}
-	if primary.streamCalls != 1 || fallback.streamCalls != 1 || meter.successCalls != 1 {
-		t.Fatalf("calls = primary %d, fallback %d, success %d", primary.streamCalls, fallback.streamCalls, meter.successCalls)
-	}
-}
-
-func TestGenerateServiceExecuteStream_DoesNotFallbackAfterVisibleOutput(t *testing.T) {
-	content := "primary answer"
-	primary := &stubProvider{stream: &stubStream{steps: []streamStep{
-		{event: domain.StreamEvent{Type: domain.StreamEventOutputTextDelta, ContentDelta: &content}},
-		{err: domain.ErrProviderUnavailable("primary")},
-	}}}
-	fallback := &stubProvider{stream: &stubStream{}}
-	meter := &stubUsageMeter{}
-	svc := newFallbackGenerateService(meter, primary, fallback)
-
-	stream, _, _, err := svc.ExecuteStream(context.Background(), domain.EndpointChatCompletions, domain.GenerateRequest{
-		PublicModelID: "model",
-		Stream:        true,
-	}, "sk-test")
-	if err != nil {
-		t.Fatalf("ExecuteStream returned error: %v", err)
-	}
-	if _, err := stream.Recv(); err != nil {
-		t.Fatalf("first Recv: %v", err)
-	}
-	if _, err := stream.Recv(); err == nil {
-		t.Fatal("expected primary stream error")
-	}
-	if fallback.streamCalls != 0 || meter.failureCalls != 1 {
-		t.Fatalf("fallback calls = %d, failure calls = %d; want 0 and 1", fallback.streamCalls, meter.failureCalls)
+	if fallback.calls != 0 {
+		t.Fatalf("fallback calls = %d, want 0", fallback.calls)
 	}
 }
 
@@ -376,7 +316,7 @@ func newFallbackGenerateService(meter *stubUsageMeter, primary, fallback *stubPr
 			MaxOutputTokens:               100,
 		}},
 		nil,
-		&stubProviderRegistry{providers: map[string]ports.GenerationProvider{
+		&stubProviderRegistry{providers: map[string]ports.Provider{
 			"primary":  primary,
 			"fallback": fallback,
 		}},
@@ -386,35 +326,6 @@ func newFallbackGenerateService(meter *stubUsageMeter, primary, fallback *stubPr
 	)
 }
 
-func (s *stubProvider) StreamGenerate(_ context.Context, _ domain.GenerateRequest, _ domain.PublicModel) (ports.GenerationStream, error) {
-	s.streamCalls++
-	return s.stream, s.streamErr
-}
-
-type streamStep struct {
-	event domain.StreamEvent
-	err   error
-}
-
-type stubStream struct {
-	steps  []streamStep
-	closed bool
-}
-
-func (s *stubStream) Recv() (domain.StreamEvent, error) {
-	if len(s.steps) == 0 {
-		return domain.StreamEvent{}, io.EOF
-	}
-	step := s.steps[0]
-	s.steps = s.steps[1:]
-	return step.event, step.err
-}
-
-func (s *stubStream) Close() error {
-	s.closed = true
-	return nil
-}
-
 type stubLogger struct{}
 
 func (stubLogger) Debug(string, ...any) {}
@@ -422,7 +333,7 @@ func (stubLogger) Info(string, ...any)  {}
 func (stubLogger) Warn(string, ...any)  {}
 func (stubLogger) Error(string, ...any) {}
 
-func TestGenerateServiceExecute_RejectsWhenBalanceIsEmpty(t *testing.T) {
+func TestProxy_RejectsWhenBalanceIsEmpty(t *testing.T) {
 	usage := &stubUsageMeter{reserveErr: domain.ErrInsufficientBalance()}
 	svc := NewGenerateService(
 		&stubAuthService{
@@ -448,7 +359,7 @@ func TestGenerateServiceExecute_RejectsWhenBalanceIsEmpty(t *testing.T) {
 		stubLogger{},
 	)
 
-	_, _, err := svc.Execute(context.Background(), domain.EndpointChatCompletions, domain.GenerateRequest{
+	_, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
 		PublicModelID: "openai/gpt-4.1-mini",
 	}, "sk-test")
 	if err == nil {
@@ -466,7 +377,7 @@ func TestGenerateServiceExecute_RejectsWhenBalanceIsEmpty(t *testing.T) {
 	}
 }
 
-func TestGenerateServiceExecute_DoesNotRouteUnknownModel(t *testing.T) {
+func TestProxy_DoesNotRouteUnknownModel(t *testing.T) {
 	router := &stubRouterClient{decision: domain.RouteDecision{PublicModelID: "minimax/minimax-m2.7"}}
 	svc := NewGenerateService(
 		&stubAuthService{authCtx: domain.AuthContext{
@@ -481,7 +392,7 @@ func TestGenerateServiceExecute_DoesNotRouteUnknownModel(t *testing.T) {
 		stubLogger{},
 	)
 
-	_, _, err := svc.Execute(context.Background(), domain.EndpointChatCompletions, domain.GenerateRequest{
+	_, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
 		PublicModelID: "unknown/model",
 	}, "sk-test")
 	if err == nil {
@@ -496,7 +407,7 @@ func TestGenerateServiceExecute_DoesNotRouteUnknownModel(t *testing.T) {
 	}
 }
 
-func TestGenerateServiceExecute_RoutesExplicitRouterToSelectedModel(t *testing.T) {
+func TestProxy_RoutesExplicitRouterToSelectedModel(t *testing.T) {
 	usage := &stubUsageMeter{}
 	category := "long-context"
 	reason := "embedding_matched"
@@ -545,17 +456,17 @@ func TestGenerateServiceExecute_RoutesExplicitRouterToSelectedModel(t *testing.T
 		stubLogger{},
 	)
 
-	result, _, err := svc.Execute(context.Background(), domain.EndpointChatCompletions, domain.GenerateRequest{
+	call, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
 		PublicModelID: "dappnode/router",
 	}, "sk-test")
 	if err != nil {
-		t.Fatalf("Execute returned error: %v", err)
+		t.Fatalf("Proxy returned error: %v", err)
 	}
 	if router.calls != 1 {
 		t.Fatalf("router calls = %d, want 1", router.calls)
 	}
-	if result.PublicModelID != "minimax/minimax-m2.7" {
-		t.Fatalf("result model = %q, want routed model", result.PublicModelID)
+	if call.Model.PublicModelID != "minimax/minimax-m2.7" || !strings.Contains(string(call.Body), `"model":"minimax/minimax-m2.7"`) {
+		t.Fatalf("result model = %q, want routed model", call.Model.PublicModelID)
 	}
 	if usage.lastSuccessReq.RequestedModelID != "dappnode/router" {
 		t.Fatalf("requested model = %q, want router id", usage.lastSuccessReq.RequestedModelID)
@@ -592,7 +503,7 @@ func TestGenerateServiceExecute_RoutesExplicitRouterToSelectedModel(t *testing.T
 	}
 }
 
-func TestGenerateServiceExecute_ReturnsRouterErrorForExplicitRouterOutage(t *testing.T) {
+func TestProxy_ReturnsRouterErrorForExplicitRouterOutage(t *testing.T) {
 	router := &stubRouterClient{err: domain.ErrInternal("an internal error occurred").WithMeta("dependency", "router")}
 	svc := NewGenerateService(
 		&stubAuthService{authCtx: domain.AuthContext{
@@ -612,7 +523,7 @@ func TestGenerateServiceExecute_ReturnsRouterErrorForExplicitRouterOutage(t *tes
 		stubLogger{},
 	)
 
-	_, _, err := svc.Execute(context.Background(), domain.EndpointChatCompletions, domain.GenerateRequest{
+	_, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
 		PublicModelID: "dappnode/router",
 	}, "sk-test")
 	if err == nil {

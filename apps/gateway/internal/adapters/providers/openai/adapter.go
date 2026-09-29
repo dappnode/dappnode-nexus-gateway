@@ -2,7 +2,6 @@ package openai
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,10 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
-	"github.com/google/uuid"
 )
 
 // Adapter is the OpenAI-compatible provider adapter.
@@ -39,122 +36,6 @@ func NewAdapter(timeout time.Duration, logger ...ports.Logger) *Adapter {
 	return &Adapter{client: NewClient(timeout), logger: l}
 }
 
-func (a *Adapter) Generate(ctx context.Context, req domain.GenerateRequest, model domain.PublicModel) (domain.GenerateResult, error) {
-	apiKey := resolveAPIKey(model.ProviderConfig.APIKeySecretRef)
-	if apiKey == "" {
-		return domain.GenerateResult{}, missingProviderCredentialError(model.ProviderConfig.ProviderName)
-	}
-
-	built := buildProviderRequest(req, model)
-	built.Body["stream"] = false
-	delete(built.Body, "stream_options")
-
-	activeBuilt := built
-	var rawResp []byte
-	var err error
-	var retryReason string
-	invalidTraceSameBodyRetries := 0
-	serverOverloadRetries := 0
-	downgradeRetried := false
-	for attempt := 1; ; attempt++ {
-		a.logProviderRequest(ctx, model, activeBuilt, attempt, retryReason)
-		rawResp, err = a.client.Do(ctx, model.ProviderConfig.BaseURL, apiKey, activeBuilt.Body)
-		if err == nil {
-			break
-		}
-		if retry := maybeBuildNovitaSameBodyRetry(model, err, activeBuilt.Body); retry.CanRetry {
-			if canSpendSameBodyRetry(retry.RetryReason, &invalidTraceSameBodyRetries, &serverOverloadRetries) {
-				retryReason = retry.RetryReason
-				metrics.ProviderRetries.WithLabelValues(model.ProviderConfig.ProviderName, retryReason).Inc()
-				if !sleepBeforeProviderRetry(ctx, retryReason) {
-					return domain.GenerateResult{}, withProviderPolicyMeta(mapProviderError(context.Cause(ctx), model.ProviderConfig.ProviderName), activeBuilt, attempt, retryReason)
-				}
-				continue
-			}
-		}
-		if !downgradeRetried {
-			if retry := maybeBuildNovitaDowngradeRetry(model, err, activeBuilt.Body); retry.CanRetry {
-				downgradeRetried = true
-				retryReason = retry.RetryReason
-				metrics.ProviderRetries.WithLabelValues(model.ProviderConfig.ProviderName, retryReason).Inc()
-				activeBuilt = builtProviderRequest{
-					Body:       retry.Body,
-					Policy:     built.Policy,
-					Transforms: built.Transforms,
-					Omitted:    retry.Omitted,
-				}
-				if !sleepBeforeProviderRetry(ctx, retryReason) {
-					return domain.GenerateResult{}, withProviderPolicyMeta(mapProviderError(context.Cause(ctx), model.ProviderConfig.ProviderName), activeBuilt, attempt, retryReason)
-				}
-				continue
-			}
-		}
-		return domain.GenerateResult{}, withProviderPolicyMeta(mapProviderErrorWithCompatibilityContext(err, model, activeBuilt.Body), activeBuilt, attempt, retryReason)
-	}
-
-	result, err := parseResponse(rawResp, req, model)
-	if err != nil {
-		return domain.GenerateResult{}, err
-	}
-	return result, nil
-}
-
-func (a *Adapter) StreamGenerate(ctx context.Context, req domain.GenerateRequest, model domain.PublicModel) (ports.GenerationStream, error) {
-	apiKey := resolveAPIKey(model.ProviderConfig.APIKeySecretRef)
-	if apiKey == "" {
-		return nil, missingProviderCredentialError(model.ProviderConfig.ProviderName)
-	}
-
-	built := buildProviderRequest(req, model)
-
-	activeBuilt := built
-	var streamResp *http.Response
-	var err error
-	var retryReason string
-	invalidTraceSameBodyRetries := 0
-	serverOverloadRetries := 0
-	downgradeRetried := false
-	attempts := 0
-	for attempt := 1; ; attempt++ {
-		attempts = attempt
-		a.logProviderRequest(ctx, model, activeBuilt, attempt, retryReason)
-		streamResp, err = a.client.DoStream(ctx, model.ProviderConfig.BaseURL, apiKey, activeBuilt.Body)
-		if err == nil {
-			break
-		}
-		if retry := maybeBuildNovitaSameBodyRetry(model, err, activeBuilt.Body); retry.CanRetry {
-			if canSpendSameBodyRetry(retry.RetryReason, &invalidTraceSameBodyRetries, &serverOverloadRetries) {
-				retryReason = retry.RetryReason
-				metrics.ProviderRetries.WithLabelValues(model.ProviderConfig.ProviderName, retryReason).Inc()
-				if !sleepBeforeProviderRetry(ctx, retryReason) {
-					return nil, withProviderPolicyMeta(mapProviderError(context.Cause(ctx), model.ProviderConfig.ProviderName), activeBuilt, attempt, retryReason)
-				}
-				continue
-			}
-		}
-		if !downgradeRetried {
-			if retry := maybeBuildNovitaDowngradeRetry(model, err, activeBuilt.Body); retry.CanRetry {
-				downgradeRetried = true
-				retryReason = retry.RetryReason
-				metrics.ProviderRetries.WithLabelValues(model.ProviderConfig.ProviderName, retryReason).Inc()
-				activeBuilt = builtProviderRequest{
-					Body:       retry.Body,
-					Policy:     built.Policy,
-					Transforms: built.Transforms,
-					Omitted:    retry.Omitted,
-				}
-				if !sleepBeforeProviderRetry(ctx, retryReason) {
-					return nil, withProviderPolicyMeta(mapProviderError(context.Cause(ctx), model.ProviderConfig.ProviderName), activeBuilt, attempt, retryReason)
-				}
-				continue
-			}
-		}
-		return nil, withProviderPolicyMeta(mapProviderErrorWithCompatibilityContext(err, model, activeBuilt.Body), activeBuilt, attempt, retryReason)
-	}
-
-	return NewStream(streamResp, model.ProviderConfig.ProviderName).WithDiagnostics(ctx, a.logger, model, attempts), nil
-}
-
 func missingProviderCredentialError(providerName string) *domain.GatewayError {
 	return domain.ErrInternal("an internal error occurred").WithMeta(
 		"provider", providerName,
@@ -164,101 +45,6 @@ func missingProviderCredentialError(providerName string) *domain.GatewayError {
 
 func resolveAPIKey(secretRef string) string {
 	return os.Getenv(secretRef)
-}
-
-func parseResponse(data json.RawMessage, req domain.GenerateRequest, model domain.PublicModel) (domain.GenerateResult, error) {
-	var resp struct {
-		ID      string `json:"id"`
-		Created int64  `json:"created"`
-		Choices []struct {
-			Index   int `json:"index"`
-			Message struct {
-				Role             string  `json:"role"`
-				Content          *string `json:"content"`
-				ReasoningContent *string `json:"reasoning_content,omitempty"`
-				ToolCalls        []struct {
-					ID       string `json:"id"`
-					Type     string `json:"type"`
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls,omitempty"`
-			} `json:"message"`
-			FinishReason *string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage *struct {
-			PromptTokens         int64 `json:"prompt_tokens"`
-			CompletionTokens     int64 `json:"completion_tokens"`
-			TotalTokens          int64 `json:"total_tokens"`
-			PromptCacheHitTokens int64 `json:"prompt_cache_hit_tokens"`
-			PromptTokensDetails  *struct {
-				CachedTokens int64 `json:"cached_tokens"`
-			} `json:"prompt_tokens_details,omitempty"`
-		} `json:"usage"`
-		BaseResp *providerBaseResponse `json:"base_resp,omitempty"`
-	}
-
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return domain.GenerateResult{}, fmt.Errorf("failed to parse provider response: %w", err)
-	}
-	if err := providerBaseResponseError(resp.BaseResp); err != nil {
-		return domain.GenerateResult{}, err
-	}
-
-	result := domain.GenerateResult{
-		ID:              resp.ID,
-		CreatedUnix:     resp.Created,
-		PublicModelID:   req.PublicModelID,
-		ProviderName:    model.ProviderConfig.ProviderName,
-		ProviderModelID: model.ProviderModelID,
-	}
-
-	if result.ID == "" {
-		result.ID = uuid.New().String()
-	}
-	if result.CreatedUnix == 0 {
-		result.CreatedUnix = time.Now().Unix()
-	}
-
-	for _, choice := range resp.Choices {
-		role := choice.Message.Role
-		out := domain.OutputItem{
-			Type:    domain.OutputItemTypeMessage,
-			Role:    &role,
-			Content: choice.Message.Content,
-		}
-		if model.ProviderConfig.ProviderName == "deepseek" {
-			out.ReasoningContent = choice.Message.ReasoningContent
-		}
-		for _, tc := range choice.Message.ToolCalls {
-			out.ToolCalls = append(out.ToolCalls, domain.ToolCall{
-				ID:            tc.ID,
-				Name:          tc.Function.Name,
-				ArgumentsJSON: tc.Function.Arguments,
-			})
-		}
-		result.Output = append(result.Output, out)
-		result.FinishReason = choice.FinishReason
-	}
-
-	if resp.Usage != nil {
-		result.Usage = &domain.Usage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
-			CacheReadTokens:  resp.Usage.PromptCacheHitTokens,
-		}
-		if resp.Usage.PromptTokensDetails != nil && resp.Usage.PromptTokensDetails.CachedTokens > 0 {
-			result.Usage.CacheReadTokens = resp.Usage.PromptTokensDetails.CachedTokens
-		}
-	}
-
-	return result, nil
-}
-
-func ParseResponse(data []byte, req domain.GenerateRequest, model domain.PublicModel) (domain.GenerateResult, error) {
-	return parseResponse(data, req, model)
 }
 
 func mapProviderError(err error, providerName string) error {
@@ -334,13 +120,6 @@ func maybeBuildNovitaSameBodyRetry(model domain.PublicModel, err error, body map
 		}
 	}
 	return retryBuildResult{}
-}
-
-func maybeBuildNovitaDowngradeRetry(model domain.PublicModel, err error, body map[string]any) retryBuildResult {
-	if model.ProviderConfig.ProviderName != "novita" || !isInvalidRequestHTTPError(err) {
-		return retryBuildResult{}
-	}
-	return buildNovitaRetryRequest(body)
 }
 
 func isInvalidRequestHTTPError(err error) bool {
@@ -437,7 +216,7 @@ func mapProviderErrorWithCompatibilityContext(err error, model domain.PublicMode
 				"upstream_code", httpErr.Code,
 				"upstream_reason", httpErr.Reason,
 				"upstream_trace_id", httpErr.TraceID,
-				"compatibility_note", "tool_choice_required_or_named_not_downgraded",
+				"compatibility_note", "tool_choice_required_or_named",
 			)
 		}
 	}
@@ -472,15 +251,12 @@ func withProviderPolicyMeta(err error, built builtProviderRequest, attempt int, 
 	}
 	if retryReason != "" {
 		fields = append(fields, "retry_reason", retryReason)
-		if built.Policy == "novita" && retryReason == "novita_invalid_request_same_body_retry" && len(built.Omitted) == 0 {
-			fields = append(fields, "retry_outcome", "same_body_failed_no_safe_downgrade")
+		if retryReason == "novita_invalid_request_same_body_retry" {
+			fields = append(fields, "retry_outcome", "same_body_failed")
 		}
 	}
 	if len(built.Transforms) > 0 {
 		fields = append(fields, "transforms", built.Transforms)
-	}
-	if len(built.Omitted) > 0 {
-		fields = append(fields, "omitted_fields", built.Omitted)
 	}
 	return gwErr.WithMeta(fields...)
 }

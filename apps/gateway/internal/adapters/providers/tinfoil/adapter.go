@@ -37,9 +37,9 @@ type VerifiedClientFactory interface {
 	NewVerifiedClient(ctx context.Context, model domain.PublicModel) (VerifiedClient, error)
 }
 
-// Adapter is the Tinfoil provider adapter. It reuses the OpenAI-compatible
-// request/response mapper, but all HTTP traffic goes through Tinfoil's
-// attested EHBP client instead of the generic OpenAI adapter.
+// Adapter is the Tinfoil provider adapter. It prepares bodies like the
+// OpenAI-compatible adapter, but all HTTP traffic goes through Tinfoil's
+// attested EHBP client.
 type Adapter struct {
 	timeout time.Duration
 	factory VerifiedClientFactory
@@ -59,59 +59,6 @@ func NewAdapterWithFactory(timeout time.Duration, factory VerifiedClientFactory,
 		factory = SDKClientFactory{}
 	}
 	return &Adapter{timeout: timeout, factory: factory, logger: l}
-}
-
-func (a *Adapter) Generate(ctx context.Context, req domain.GenerateRequest, model domain.PublicModel) (domain.GenerateResult, error) {
-	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
-	if apiKey == "" {
-		return domain.GenerateResult{}, missingProviderCredentialError()
-	}
-
-	body := openai.BuildRequestBody(req, model)
-	body["stream"] = false
-	delete(body, "stream_options")
-
-	verified, proof, err := a.newVerifiedClient(ctx, model)
-	if err != nil {
-		return domain.GenerateResult{}, err
-	}
-
-	respBody, err := a.do(ctx, verified, apiKey, body)
-	if err != nil {
-		return domain.GenerateResult{}, openai.MapProviderErrorWithCompatibilityContext(err, model, body)
-	}
-
-	result, err := openai.ParseResponse(respBody, req, model)
-	if err != nil {
-		return domain.GenerateResult{}, err
-	}
-	proof.ProviderResponseID = result.ID
-	result.TinfoilProof = proof
-	return result, nil
-}
-
-func (a *Adapter) StreamGenerate(ctx context.Context, req domain.GenerateRequest, model domain.PublicModel) (ports.GenerationStream, error) {
-	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
-	if apiKey == "" {
-		return nil, missingProviderCredentialError()
-	}
-
-	body := openai.BuildRequestBody(req, model)
-
-	verified, proof, err := a.newVerifiedClient(ctx, model)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := a.doStream(ctx, verified, apiKey, body)
-	if err != nil {
-		return nil, openai.MapProviderErrorWithCompatibilityContext(err, model, body)
-	}
-
-	return &Stream{
-		inner: openai.NewStream(resp, providerName).WithDiagnostics(ctx, a.logger, model, 1),
-		proof: proof,
-	}, nil
 }
 
 func missingProviderCredentialError() *domain.GatewayError {
@@ -256,31 +203,6 @@ func tinfoilSDKVersion() string {
 	return "github.com/tinfoilsh/tinfoil-go"
 }
 
-// Stream decorates the OpenAI-compatible stream with Tinfoil proof evidence.
-type Stream struct {
-	inner ports.GenerationStream
-	proof *domain.TinfoilTransportProof
-}
-
-func (s *Stream) Recv() (domain.StreamEvent, error) {
-	return s.inner.Recv()
-}
-
-func (s *Stream) Close() error {
-	return s.inner.Close()
-}
-
-func (s *Stream) VerifiedTransportProof() *domain.TinfoilTransportProof {
-	if s.proof == nil {
-		return nil
-	}
-	cp := *s.proof
-	if len(s.proof.VerificationEvidenceJSON) > 0 {
-		cp.VerificationEvidenceJSON = json.RawMessage(append([]byte(nil), s.proof.VerificationEvidenceJSON...))
-	}
-	return &cp
-}
-
 // SDKClientFactory is the production Tinfoil SDK factory.
 type SDKClientFactory struct{}
 
@@ -339,4 +261,47 @@ func (c *sdkVerifiedClient) TransportMode() string {
 
 func (c *sdkVerifiedClient) GroundTruth() *verifierclient.GroundTruth {
 	return c.groundTruth
+}
+
+// Stream forwards a streaming request over the attested transport and
+// returns the SSE body untouched, with the transport proof.
+func (a *Adapter) Stream(ctx context.Context, raw []byte, model domain.PublicModel) (ports.ProviderStream, error) {
+	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
+	if apiKey == "" {
+		return ports.ProviderStream{}, missingProviderCredentialError()
+	}
+	body, _, err := openai.PrepareProxyBody(raw, model, true)
+	if err != nil {
+		return ports.ProviderStream{}, err
+	}
+	verified, proof, err := a.newVerifiedClient(ctx, model)
+	if err != nil {
+		return ports.ProviderStream{}, err
+	}
+	resp, err := a.doStream(ctx, verified, apiKey, body)
+	if err != nil {
+		return ports.ProviderStream{}, openai.MapProviderErrorWithCompatibilityContext(err, model, body)
+	}
+	return ports.ProviderStream{Body: resp.Body, Proof: proof}, nil
+}
+
+// Complete forwards a non-streaming request over the attested transport.
+func (a *Adapter) Complete(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
+	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
+	if apiKey == "" {
+		return nil, nil, missingProviderCredentialError()
+	}
+	body, _, err := openai.PrepareProxyBody(raw, model, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	verified, proof, err := a.newVerifiedClient(ctx, model)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := a.do(ctx, verified, apiKey, body)
+	if err != nil {
+		return nil, nil, openai.MapProviderErrorWithCompatibilityContext(err, model, body)
+	}
+	return out, proof, nil
 }

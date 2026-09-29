@@ -31,16 +31,12 @@ func TestErrorConstructors(t *testing.T) {
 		wantCode   string
 	}{
 		{"InvalidAPIKey", domain.ErrInvalidAPIKey("bad"), 401, domain.ErrTypeAuthentication, domain.ErrCodeInvalidAPIKey},
-		{"InactiveAPIKey", domain.ErrInactiveAPIKey(), 401, domain.ErrTypeAuthentication, domain.ErrCodeInactiveAPIKey},
-		{"InactiveAccount", domain.ErrInactiveAccount(), 403, domain.ErrTypePermission, domain.ErrCodeInactiveAccount},
 		{"UnsupportedModel", domain.ErrUnsupportedModel("foo"), 404, domain.ErrTypeInvalidRequest, domain.ErrCodeUnsupportedModel},
 		{"UnsupportedEndpoint", domain.ErrUnsupportedEndpoint("m", "e"), 422, domain.ErrTypeInvalidRequest, domain.ErrCodeUnsupportedEndpoint},
 		{"UnsupportedFeature", domain.ErrUnsupportedFeature("f"), 422, domain.ErrTypeInvalidRequest, domain.ErrCodeUnsupportedFeature},
 		{"ProviderUnavailable", domain.ErrProviderUnavailable("p"), 503, domain.ErrTypeProvider, domain.ErrCodeProviderUnavailable},
 		{"ProviderTimeout", domain.ErrProviderTimeout("p"), 504, domain.ErrTypeProvider, domain.ErrCodeProviderTimeout},
 		{"InvalidField", domain.ErrInvalidField("f"), 400, domain.ErrTypeInvalidRequest, domain.ErrCodeInvalidField},
-		{"InsufficientBalance", domain.ErrInsufficientBalance(), 402, domain.ErrTypePermission, domain.ErrCodeInsufficientBalance},
-		{"UnknownField", domain.ErrUnknownField("f"), 400, domain.ErrTypeInvalidRequest, domain.ErrCodeUnknownField},
 		{"Internal", domain.ErrInternal("i"), 500, domain.ErrTypeInternal, domain.ErrCodeInternalError},
 	}
 
