@@ -75,44 +75,27 @@ func wellFormed(t *testing.T, calls []strictCall, names ...string) {
 }
 
 func TestStream_ToolCallProviderShapes(t *testing.T) {
+	// The translating path keeps what providers send; it doesn't repair it.
 	for name, tc := range map[string]struct {
-		sse   string
-		names []string
-		text  string
+		sse    string
+		names  []string
+		text   string
+		finish string
 	}{
 		"several calls packed in one chunk": {sse: sse(
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read","arguments":"{\"p\":1}"}},{"index":1,"id":"b","type":"function","function":{"name":"list","arguments":"{}"}}]}}]}`,
 			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`),
-			names: []string{"read", "list"}},
+			names: []string{"read", "list"}, finish: "tool_calls"},
 		"several calls packed with the finish reason": {sse: sse(
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{}"}},{"index":1,"id":"b","function":{"name":"read","arguments":"{}"}},{"index":2,"id":"c","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`),
-			names: []string{"read", "read", "read"}},
-		"id and name repeated on every fragment": {sse: sse(
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read","arguments":"{\"p\""}}]}}]}`,
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read","arguments":":1}"}}]}}]}`,
-			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`),
-			names: []string{"read"}},
-		"index reused with distinct ids": {sse: sse(
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{}"}}]}}]}`,
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b","function":{"name":"list","arguments":"{"}}]}}]}`,
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]}}]}`,
-			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`),
-			names: []string{"read", "list"}},
-		"missing id and sparse index": {sse: sse(
-			`{"choices":[{"delta":{"tool_calls":[{"index":3,"function":{"name":"read","arguments":"{}"}}]}}]}`,
-			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`),
-			names: []string{"read"}},
-		"no arguments and a stop finish reason": {sse: sse(
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"list"}}]}}]}`,
-			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`),
-			names: []string{"list"}},
+			names: []string{"read", "read", "read"}, finish: "tool_calls"},
 		"text in the same chunk as a call": {sse: sse(
 			`{"choices":[{"delta":{"content":"Reading.","tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{}"}}]}}]}`,
 			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`),
-			names: []string{"read"}, text: "Reading."},
+			names: []string{"read"}, text: "Reading.", finish: "tool_calls"},
 		"no finish reason at all": {sse: sse(
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{}"}}]}}]}`),
-			names: []string{"read"}},
+			names: []string{"read"}, finish: "stop"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			calls, text, finish, err := drain(t, tc.sse)
@@ -120,7 +103,7 @@ func TestStream_ToolCallProviderShapes(t *testing.T) {
 				t.Fatal(err)
 			}
 			wellFormed(t, calls, tc.names...)
-			if text != tc.text || finish != "tool_calls" {
+			if text != tc.text || finish != tc.finish {
 				t.Fatalf("text %q finish %q", text, finish)
 			}
 		})

@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/mapper"
@@ -43,18 +45,51 @@ func (h *ChatCompletionsHandler) Handle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	genReq, err := mapper.ChatCompletionRequestToDomain(body)
+	if err != nil {
+		WriteErrorWithLog(w, r, h.logger, err)
+		return
+	}
+
+	// The gateway is a proxy: the request goes upstream as the client sent it
+	// and the provider's response comes back as it came. Only requests that
+	// need content rewritten (PII masking) or another wire format take the
+	// translating path below.
+	upstream, cancelUpstream := context.WithCancel(context.WithoutCancel(r.Context()))
+	defer cancelUpstream()
+	var finished atomic.Bool
+	stopWatch := context.AfterFunc(r.Context(), func() {
+		// A client gone after the finish reason still gets its usage metered:
+		// the upstream is drained briefly instead of cut off.
+		if finished.Load() {
+			time.AfterFunc(streamUsageDrainTimeout, cancelUpstream)
+			return
+		}
+		cancelUpstream()
+	})
+	defer stopWatch()
+	call, err := h.service.Proxy(upstream, body, genReq, token)
+	if err == nil {
+		if call.Stream != nil {
+			h.relay(w, r, call.Stream, &finished)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(call.Body)
+		return
+	}
+	if !errors.Is(err, services.ErrNotProxyable) {
+		WriteErrorWithLog(w, r, h.logger, err)
+		return
+	}
+
 	if fields := mapper.UnknownChatCompletionFields(body); len(fields) > 0 {
 		h.logger.Warn("chat completion request ignored unknown fields",
 			"request_id", middleware.GetRequestID(r.Context()),
 			"path", r.URL.Path,
 			"fields", fields,
 		)
-	}
-
-	genReq, err := mapper.ChatCompletionRequestToDomain(body)
-	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, err)
-		return
 	}
 
 	if genReq.Stream {
@@ -70,6 +105,69 @@ func (h *ChatCompletionsHandler) Handle(w http.ResponseWriter, r *http.Request) 
 
 	resp := mapper.DomainToChatCompletionResponse(result)
 	WriteJSON(w, http.StatusOK, resp)
+}
+
+// relay sends a provider's stream to the client line by line, as it came.
+// Keep-alive comments fill long silences (slow reasoning), and a stream the
+// provider finished without [DONE] gets one, so every client sees an end.
+func (h *ChatCompletionsHandler) relay(w http.ResponseWriter, r *http.Request, stream *services.ProxyStream, finished *atomic.Bool) {
+	defer stream.Close()
+	sw, err := sse.NewWriter(w)
+	if err != nil {
+		WriteError(w, domain.ErrInternal("an internal error occurred"))
+		return
+	}
+	var writeMu sync.Mutex
+	lastWrite := time.Now()
+	write := func(line []byte) {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		lastWrite = time.Now()
+		// A client that left keeps the loop draining the upstream for usage.
+		_ = sw.WriteLine(line)
+	}
+	stopKeepAlive := make(chan struct{})
+	defer close(stopKeepAlive)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopKeepAlive:
+				return
+			case <-ticker.C:
+				writeMu.Lock()
+				if time.Since(lastWrite) >= 15*time.Second {
+					lastWrite = time.Now()
+					_ = sw.WriteComment("keepalive")
+				}
+				writeMu.Unlock()
+			}
+		}
+	}()
+
+	var readErr error
+	for {
+		line, err := stream.Next()
+		if err != nil {
+			readErr = err
+			break
+		}
+		if stream.Finished() {
+			finished.Store(true)
+		}
+		write(line)
+	}
+	switch {
+	case stream.Complete() && !stream.SawDone():
+		write([]byte("data: [DONE]"))
+		write(nil)
+	case readErr != io.EOF && r.Context().Err() == nil:
+		// The upstream broke mid-response: say so rather than end quietly.
+		h.logger.Warn("proxied stream interrupted", "request_id", middleware.GetRequestID(r.Context()))
+		write([]byte(`data: {"error":{"type":"provider_error","code":"stream_interrupted","message":"The provider stream ended unexpectedly."}}`))
+		write(nil)
+	}
 }
 
 func (h *ChatCompletionsHandler) handleStream(w http.ResponseWriter, r *http.Request, genReq domain.GenerateRequest, token string) {

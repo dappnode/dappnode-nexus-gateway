@@ -2,8 +2,6 @@ package openai
 
 import (
 	"bufio"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -16,18 +14,15 @@ import (
 // arguments send a whole call (for example a large file) in one line.
 const maxSSELine = 16 << 20
 
-// Stream reads SSE events from an OpenAI-compatible streaming response and
-// normalizes them, so every client sees the same well-formed shape whatever
-// the provider sends:
+// Stream reads SSE events from an OpenAI-compatible streaming response for
+// the translating path (PII masking, non-OpenAI clients of the domain model).
+// Proxied requests don't use it. It keeps everything the provider sent:
 //
-//   - every tool call in a chunk is forwarded, not only the first;
-//   - each tool call gets contiguous indexes, one id (synthesized if the
-//     provider omits it), and its id and name only once;
-//   - a call that received no arguments gets "{}";
-//   - text in a chunk that also carries tool calls is kept;
-//   - a usage-only chunk before the finish reason does not end the stream;
-//   - a stream that ends without a finish reason gets one, while a stream with
-//     no chunk at all or an error payload is reported as a provider error.
+//   - every tool call in a chunk, not only the first;
+//   - text in a chunk that also carries tool calls;
+//   - output after an early usage-only chunk (which doesn't end the stream);
+//   - a finish reason at the end, and a provider error for a stream with no
+//     chunk at all or an error payload.
 type Stream struct {
 	diagnostics             *streamDiagnostics
 	resp                    *http.Response
@@ -35,7 +30,6 @@ type Stream struct {
 	done                    bool // upstream fully read
 	includeReasoningContent bool
 	pending                 []domain.StreamEvent
-	tools                   toolCallNormalizer
 	completed               bool // a finish reason was forwarded
 	sawChunk                bool
 	lastUsage               *domain.Usage
@@ -167,27 +161,14 @@ func (s *Stream) normalize(events []domain.StreamEvent) []domain.StreamEvent {
 			s.lastUsage = event.Usage
 		}
 		switch {
-		case event.ToolCallDelta != nil:
-			event.ToolCallDelta = s.tools.normalize(event.ToolCallDelta)
-			if event.ToolCallDelta == nil {
-				if event.Usage == nil {
-					continue
-				}
-				event.Type = domain.StreamEventOutputMessageDelta
-			}
 		case event.Type == domain.StreamEventCompleted && s.completed:
 			// Trailing usage after the finish reason.
 		case event.Type == domain.StreamEventCompleted && event.FinishReason == nil:
 			// Usage-only chunk before the model finished: not the end.
 			event.Type = domain.StreamEventOutputMessageDelta
 		case event.Type == domain.StreamEventCompleted:
-			out = append(out, s.tools.fillEmptyArguments()...)
 			if event.Usage == nil {
 				event.Usage = s.lastUsage // Usage sent before the finish reason.
-			}
-			if s.tools.seen() && *event.FinishReason == "stop" {
-				finish := "tool_calls"
-				event.FinishReason = &finish
 			}
 			s.completed = true
 		}
@@ -200,97 +181,6 @@ func (s *Stream) Close() error {
 	s.diagnostics.end("closed", nil)
 	s.done = true
 	return s.resp.Body.Close()
-}
-
-// toolCallNormalizer turns provider tool-call fragments into the OpenAI shape:
-// indexes 0..n-1 in order of appearance, the id, type, and name on the first
-// fragment only, and arguments as they stream. Providers differ: some pack
-// several calls in one chunk, some repeat the id and name on every fragment,
-// some reuse index 0 for every call with distinct ids, and some omit the id.
-type toolCallNormalizer struct {
-	byIndex map[int]*toolCallSlot
-	slots   []*toolCallSlot
-}
-
-type toolCallSlot struct {
-	index     int
-	id, name  string
-	arguments int
-}
-
-func (n *toolCallNormalizer) seen() bool { return len(n.slots) > 0 }
-
-func (n *toolCallNormalizer) normalize(in *domain.ToolCallDelta) *domain.ToolCallDelta {
-	if n.byIndex == nil {
-		n.byIndex = map[int]*toolCallSlot{}
-	}
-	id := ""
-	if in.ID != nil {
-		id = *in.ID
-	}
-	slot := n.byIndex[in.Index]
-	if slot != nil && id != "" && id != slot.id {
-		slot = nil // A new call that reuses the index.
-	}
-	out := &domain.ToolCallDelta{}
-	if slot == nil {
-		slot = &toolCallSlot{index: len(n.slots), id: id}
-		if slot.id == "" {
-			slot.id = newToolCallID()
-		}
-		n.slots = append(n.slots, slot)
-		n.byIndex[in.Index] = slot
-		out.ID = &slot.id
-	}
-	out.Index = slot.index
-	if in.Name != nil && *in.Name != "" && *in.Name != slot.name {
-		name := *in.Name
-		if slot.name != "" {
-			if !strings.HasPrefix(name, slot.name) {
-				slot.name += name // Streamed in pieces.
-			} else {
-				name = strings.TrimPrefix(name, slot.name) // Repeated with more text.
-				slot.name += name
-			}
-		} else {
-			slot.name = name
-		}
-		if name != "" {
-			out.Name = &name
-		}
-	}
-	if in.ArgumentsDelta != nil && *in.ArgumentsDelta != "" {
-		arguments := *in.ArgumentsDelta
-		slot.arguments += len(arguments)
-		out.ArgumentsDelta = &arguments
-	}
-	if out.ID == nil && out.Name == nil && out.ArgumentsDelta == nil {
-		return nil
-	}
-	return out
-}
-
-// fillEmptyArguments gives calls that received no arguments "{}", which is
-// what OpenAI sends and what strict clients parse.
-func (n *toolCallNormalizer) fillEmptyArguments() []domain.StreamEvent {
-	var events []domain.StreamEvent
-	for _, slot := range n.slots {
-		if slot.arguments == 0 {
-			slot.arguments = 2
-			empty := "{}"
-			events = append(events, domain.StreamEvent{
-				Type:          domain.StreamEventToolCallDelta,
-				ToolCallDelta: &domain.ToolCallDelta{Index: slot.index, ArgumentsDelta: &empty},
-			})
-		}
-	}
-	return events
-}
-
-func newToolCallID() string {
-	b := make([]byte, 12)
-	_, _ = rand.Read(b)
-	return "call_" + hex.EncodeToString(b)
 }
 
 type chatCompletionChunk struct {

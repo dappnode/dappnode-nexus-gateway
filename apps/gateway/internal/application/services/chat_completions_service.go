@@ -28,3 +28,9 @@ func (s *ChatCompletionsService) ExecuteStream(ctx context.Context, req domain.G
 	stream, _, model, err := s.generate.ExecuteStream(ctx, domain.EndpointChatCompletions, req, bearerToken)
 	return stream, model, err
 }
+
+// Proxy runs a /v1/chat/completions request as a proxy; it returns
+// ErrNotProxyable when the request needs the translating path.
+func (s *ChatCompletionsService) Proxy(ctx context.Context, raw []byte, req domain.GenerateRequest, bearerToken string) (*ProxyCall, error) {
+	return s.generate.Proxy(ctx, domain.EndpointChatCompletions, raw, req, bearerToken)
+}

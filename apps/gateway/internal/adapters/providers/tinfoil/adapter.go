@@ -340,3 +340,46 @@ func (c *sdkVerifiedClient) TransportMode() string {
 func (c *sdkVerifiedClient) GroundTruth() *verifierclient.GroundTruth {
 	return c.groundTruth
 }
+
+// ProxyStream forwards a streaming request over the attested transport and
+// returns the SSE body untouched, with the transport proof.
+func (a *Adapter) ProxyStream(ctx context.Context, raw []byte, model domain.PublicModel) (ports.ProxyResponse, error) {
+	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
+	if apiKey == "" {
+		return ports.ProxyResponse{}, missingProviderCredentialError()
+	}
+	body, _, err := openai.PrepareProxyBody(raw, model, true)
+	if err != nil {
+		return ports.ProxyResponse{}, err
+	}
+	verified, proof, err := a.newVerifiedClient(ctx, model)
+	if err != nil {
+		return ports.ProxyResponse{}, err
+	}
+	resp, err := a.doStream(ctx, verified, apiKey, body)
+	if err != nil {
+		return ports.ProxyResponse{}, openai.MapProviderErrorWithCompatibilityContext(err, model, body)
+	}
+	return ports.ProxyResponse{Body: resp.Body, Proof: proof}, nil
+}
+
+// ProxyJSON forwards a non-streaming request over the attested transport.
+func (a *Adapter) ProxyJSON(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
+	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
+	if apiKey == "" {
+		return nil, nil, missingProviderCredentialError()
+	}
+	body, _, err := openai.PrepareProxyBody(raw, model, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	verified, proof, err := a.newVerifiedClient(ctx, model)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := a.do(ctx, verified, apiKey, body)
+	if err != nil {
+		return nil, nil, openai.MapProviderErrorWithCompatibilityContext(err, model, body)
+	}
+	return out, proof, nil
+}

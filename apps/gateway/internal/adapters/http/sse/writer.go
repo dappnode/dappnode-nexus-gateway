@@ -79,3 +79,12 @@ func (sw *Writer) WriteComment(text string) error {
 	sw.flusher.Flush()
 	return nil
 }
+
+// WriteLine relays one line of an upstream SSE stream as it came.
+func (sw *Writer) WriteLine(line []byte) error {
+	if _, err := sw.w.Write(append(line, '\n')); err != nil {
+		return err
+	}
+	sw.flusher.Flush()
+	return nil
+}
