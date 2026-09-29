@@ -13,67 +13,7 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
 
-func TestBuildNovitaRetryRequest_GuardedDowngrade(t *testing.T) {
-	body := map[string]any{
-		"model":               "moonshotai/kimi-k2.6",
-		"parallel_tool_calls": false,
-		"store":               true,
-		"service_tier":        "auto",
-		"user":                "user-1",
-		"tool_choice":         "auto",
-	}
-
-	retry := buildNovitaRetryRequest(body)
-	if !retry.CanRetry {
-		t.Fatal("expected retry to be allowed")
-	}
-	for _, field := range []string{"parallel_tool_calls", "store", "service_tier", "user", "tool_choice"} {
-		if _, ok := retry.Body[field]; ok {
-			t.Fatalf("retry body still contains %s", field)
-		}
-	}
-	for _, omitted := range []string{"parallel_tool_calls", "store", "service_tier", "user", "tool_choice=auto"} {
-		if !containsString(retry.Omitted, omitted) {
-			t.Fatalf("omitted = %v, missing %s", retry.Omitted, omitted)
-		}
-	}
-}
-
-func TestBuildNovitaRetryRequest_ToolChoiceNoneRemovesTools(t *testing.T) {
-	body := map[string]any{
-		"model":       "moonshotai/kimi-k2.6",
-		"tool_choice": "none",
-		"tools":       []map[string]any{{"type": "function"}},
-	}
-
-	retry := buildNovitaRetryRequest(body)
-	if !retry.CanRetry {
-		t.Fatal("expected retry to be allowed")
-	}
-	if _, ok := retry.Body["tool_choice"]; ok {
-		t.Fatal("retry body still contains tool_choice")
-	}
-	if _, ok := retry.Body["tools"]; ok {
-		t.Fatal("retry body still contains tools")
-	}
-}
-
-func TestBuildNovitaRetryRequest_NamedToolChoiceIsNotDowngraded(t *testing.T) {
-	body := map[string]any{
-		"model": "moonshotai/kimi-k2.6",
-		"tool_choice": map[string]any{
-			"type":     "function",
-			"function": map[string]any{"name": "noop"},
-		},
-	}
-
-	retry := buildNovitaRetryRequest(body)
-	if retry.CanRetry {
-		t.Fatalf("named tool_choice must not be downgraded, omitted = %v", retry.Omitted)
-	}
-}
-
-func TestAdapterComplete_NovitaRetriesSafeDowngrade(t *testing.T) {
+func TestAdapterComplete_NovitaRetriesTheSameBody(t *testing.T) {
 	t.Setenv("NOVITA_TEST_KEY", "test-key")
 	var attempts int
 	var bodies []map[string]any
@@ -85,7 +25,7 @@ func TestAdapterComplete_NovitaRetriesSafeDowngrade(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		bodies = append(bodies, body)
-		if attempts <= 3 {
+		if attempts <= 2 {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(`{"message":"invalid request error trace_id: testtrace","type":"invalid_request_error"}`))
 			return
@@ -104,26 +44,15 @@ func TestAdapterComplete_NovitaRetriesSafeDowngrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete returned error: %v", err)
 	}
-	if attempts != 4 {
-		t.Fatalf("attempts = %d, want 4", attempts)
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
 	}
-	for _, field := range []string{"parallel_tool_calls", "store", "service_tier", "user", "tool_choice"} {
-		if _, ok := bodies[1][field]; !ok {
-			t.Fatalf("same-body retry should still contain %s", field)
+	for i, body := range bodies {
+		for _, field := range []string{"parallel_tool_calls", "store", "service_tier", "user", "tool_choice", "tools"} {
+			if _, ok := body[field]; !ok {
+				t.Fatalf("attempt %d changed the body: missing %s", i+1, field)
+			}
 		}
-	}
-	for _, field := range []string{"parallel_tool_calls", "store", "service_tier", "user", "tool_choice"} {
-		if _, ok := bodies[2][field]; !ok {
-			t.Fatalf("second same-body retry should still contain %s", field)
-		}
-	}
-	for _, field := range []string{"parallel_tool_calls", "store", "service_tier", "user", "tool_choice"} {
-		if _, ok := bodies[3][field]; ok {
-			t.Fatalf("downgrade retry body still contains %s", field)
-		}
-	}
-	if _, ok := bodies[3]["tools"]; !ok {
-		t.Fatal("tool_choice=auto retry should keep tools")
 	}
 }
 
@@ -173,8 +102,8 @@ func TestAdapterComplete_NovitaSafeRetryStillReportsNamedToolChoiceIncompatibili
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if attempts != 4 {
-		t.Fatalf("attempts = %d, want 4", attempts)
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
 	}
 	if !strings.Contains(err.Error(), "tool_choice") {
 		t.Fatalf("error = %q, want clear tool_choice context", err.Error())
@@ -208,8 +137,8 @@ func TestAdapterComplete_NovitaFailedSameBodyRetryIncludesProviderParams(t *test
 	if !errors.As(err, &gwErr) {
 		t.Fatalf("error = %T, want *domain.GatewayError", err)
 	}
-	if got := gwErr.Metadata["retry_outcome"]; got != "same_body_failed_no_safe_downgrade" {
-		t.Fatalf("retry_outcome = %v, want same_body_failed_no_safe_downgrade", got)
+	if got := gwErr.Metadata["retry_outcome"]; got != "same_body_failed" {
+		t.Fatalf("retry_outcome = %v, want same_body_failed", got)
 	}
 	params, ok := gwErr.Metadata["provider_params"].(map[string]any)
 	if !ok {

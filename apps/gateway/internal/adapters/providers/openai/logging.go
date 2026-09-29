@@ -26,9 +26,6 @@ func (a *Adapter) logProviderRequest(ctx context.Context, model domain.PublicMod
 	if len(built.Transforms) > 0 {
 		fields = append(fields, "transforms", built.Transforms)
 	}
-	if len(built.Omitted) > 0 {
-		fields = append(fields, "omitted_fields", built.Omitted)
-	}
 	a.logger.Info("provider request", fields...)
 }
 

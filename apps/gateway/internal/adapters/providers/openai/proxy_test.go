@@ -65,7 +65,7 @@ func TestPrepareProxyBody_Edits(t *testing.T) {
 		}
 	})
 	t.Run("output limit clamped and named per provider", func(t *testing.T) {
-		for provider, field := range map[string]string{"novita": "max_tokens", "deepseek": "max_tokens", "tinfoil": "max_completion_tokens", "phala": "max_completion_tokens"} {
+		for provider, field := range map[string]string{"deepseek": "max_tokens", "novita": "max_completion_tokens", "tinfoil": "max_completion_tokens", "phala": "max_completion_tokens"} {
 			got := prepared(t, `{"messages":[],"max_completion_tokens":50000}`, provider, false)
 			if got[field] != float64(8000) || len(got) != 3 {
 				t.Fatalf("%s: %v", provider, got)
@@ -83,7 +83,7 @@ func TestPrepareProxyBody_Edits(t *testing.T) {
 			t.Fatal("developer role not mapped")
 		}
 		assistant := deepseek[1].(map[string]any)
-		if v, ok := assistant["content"]; !ok || v != nil || assistant["reasoning_content"] != "" {
+		if _, ok := assistant["content"]; ok || assistant["reasoning_content"] != "" {
 			t.Fatalf("deepseek assistant %v", assistant)
 		}
 		other := prepared(t, raw, "tinfoil", false)["messages"].([]any)[1].(map[string]any)

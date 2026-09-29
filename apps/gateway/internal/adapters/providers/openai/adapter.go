@@ -122,13 +122,6 @@ func maybeBuildNovitaSameBodyRetry(model domain.PublicModel, err error, body map
 	return retryBuildResult{}
 }
 
-func maybeBuildNovitaDowngradeRetry(model domain.PublicModel, err error, body map[string]any) retryBuildResult {
-	if model.ProviderConfig.ProviderName != "novita" || !isInvalidRequestHTTPError(err) {
-		return retryBuildResult{}
-	}
-	return buildNovitaRetryRequest(body)
-}
-
 func isInvalidRequestHTTPError(err error) bool {
 	var httpErr *ProviderHTTPError
 	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusBadRequest {
@@ -223,7 +216,7 @@ func mapProviderErrorWithCompatibilityContext(err error, model domain.PublicMode
 				"upstream_code", httpErr.Code,
 				"upstream_reason", httpErr.Reason,
 				"upstream_trace_id", httpErr.TraceID,
-				"compatibility_note", "tool_choice_required_or_named_not_downgraded",
+				"compatibility_note", "tool_choice_required_or_named",
 			)
 		}
 	}
@@ -258,15 +251,12 @@ func withProviderPolicyMeta(err error, built builtProviderRequest, attempt int, 
 	}
 	if retryReason != "" {
 		fields = append(fields, "retry_reason", retryReason)
-		if built.Policy == "novita" && retryReason == "novita_invalid_request_same_body_retry" && len(built.Omitted) == 0 {
-			fields = append(fields, "retry_outcome", "same_body_failed_no_safe_downgrade")
+		if retryReason == "novita_invalid_request_same_body_retry" {
+			fields = append(fields, "retry_outcome", "same_body_failed")
 		}
 	}
 	if len(built.Transforms) > 0 {
 		fields = append(fields, "transforms", built.Transforms)
-	}
-	if len(built.Omitted) > 0 {
-		fields = append(fields, "omitted_fields", built.Omitted)
 	}
 	return gwErr.WithMeta(fields...)
 }

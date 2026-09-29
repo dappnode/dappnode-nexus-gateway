@@ -87,10 +87,6 @@ func PrepareProxyBody(raw []byte, model domain.PublicModel, stream bool) (map[st
 		if len(toolCalls) > 0 {
 			msg["tool_calls"] = toolCalls
 		}
-		if _, has := msg["content"]; !has && len(toolCalls) > 0 && policy.explicitNullAssistantToolContent {
-			msg["content"] = nil
-			transforms = append(transforms, "assistant_tool_content=null")
-		}
 		if _, has := msg["reasoning_content"]; !has && len(toolCalls) > 0 && policy.requireToolReasoningContent {
 			msg["reasoning_content"] = ""
 			transforms = append(transforms, "assistant_tool_reasoning_content=empty")
@@ -191,37 +187,23 @@ func (a *Adapter) proxy(ctx context.Context, body map[string]any, transforms []s
 		return nil, missingProviderCredentialError(model.ProviderConfig.ProviderName)
 	}
 	built := builtProviderRequest{Body: body, Policy: policyForProvider(model.ProviderConfig.ProviderName).name, Transforms: transforms}
-	active := built
 	var retryReason string
 	invalidTraceRetries, overloadRetries := 0, 0
-	downgradeRetried := false
 	for attempt := 1; ; attempt++ {
-		a.logProviderRequest(ctx, model, active, attempt, retryReason)
-		resp, err := send(ctx, apiKey, active.Body)
+		a.logProviderRequest(ctx, model, built, attempt, retryReason)
+		resp, err := send(ctx, apiKey, built.Body)
 		if err == nil {
 			return resp, nil
 		}
-		if retry := maybeBuildNovitaSameBodyRetry(model, err, active.Body); retry.CanRetry &&
+		if retry := maybeBuildNovitaSameBodyRetry(model, err, built.Body); retry.CanRetry &&
 			canSpendSameBodyRetry(retry.RetryReason, &invalidTraceRetries, &overloadRetries) {
 			retryReason = retry.RetryReason
 			metrics.ProviderRetries.WithLabelValues(model.ProviderConfig.ProviderName, retryReason).Inc()
 			if !sleepBeforeProviderRetry(ctx, retryReason) {
-				return nil, withProviderPolicyMeta(mapProviderError(context.Cause(ctx), model.ProviderConfig.ProviderName), active, attempt, retryReason)
+				return nil, withProviderPolicyMeta(mapProviderError(context.Cause(ctx), model.ProviderConfig.ProviderName), built, attempt, retryReason)
 			}
 			continue
 		}
-		if !downgradeRetried {
-			if retry := maybeBuildNovitaDowngradeRetry(model, err, active.Body); retry.CanRetry {
-				downgradeRetried = true
-				retryReason = retry.RetryReason
-				metrics.ProviderRetries.WithLabelValues(model.ProviderConfig.ProviderName, retryReason).Inc()
-				active = builtProviderRequest{Body: retry.Body, Policy: built.Policy, Transforms: transforms, Omitted: retry.Omitted}
-				if !sleepBeforeProviderRetry(ctx, retryReason) {
-					return nil, withProviderPolicyMeta(mapProviderError(context.Cause(ctx), model.ProviderConfig.ProviderName), active, attempt, retryReason)
-				}
-				continue
-			}
-		}
-		return nil, withProviderPolicyMeta(mapProviderErrorWithCompatibilityContext(err, model, active.Body), active, attempt, retryReason)
+		return nil, withProviderPolicyMeta(mapProviderErrorWithCompatibilityContext(err, model, built.Body), built, attempt, retryReason)
 	}
 }
