@@ -139,6 +139,8 @@ type outcome struct {
 	proof      *domain.TinfoilTransportProof
 	err        error  // Set when the response failed.
 	end        string // How a stream ended, for logs.
+	// Stream diagnostics: data events read, and ones that were not JSON.
+	chunks, malformed int
 }
 
 // finishProxy meters and logs a proxied response.
@@ -151,6 +153,7 @@ func (s *GenerateService) finishProxy(ctx context.Context, authCtx domain.AuthCo
 		"provider", model.ProviderConfig.ProviderName, "provider_model", model.UpstreamModelName,
 		"stream", req.Stream, "stream_end", o.end, "finish_reason", logfields.FinishReason(o.finish),
 		"usage_received", o.usage != nil, "usage", o.usage, "latency_ms", latencyMs,
+		"chunks_received", o.chunks, "malformed_chunks", o.malformed,
 	}
 	if o.err != nil {
 		s.logger.Error("generation failed", append(fields, "error_type", fmt.Sprintf("%T", o.err))...)
@@ -397,9 +400,11 @@ func (p *ProxyStream) observe(raw []byte) ([][]byte, *chunk) {
 	}
 	var c chunk
 	if json.Unmarshal(data, &c) != nil {
+		p.o.malformed++
 		return [][]byte{line}, nil
 	}
 	p.chunks++
+	p.o.chunks = p.chunks
 	if c.ID != "" {
 		p.o.providerID = c.ID
 	}
