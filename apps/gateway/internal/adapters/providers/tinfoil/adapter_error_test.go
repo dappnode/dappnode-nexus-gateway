@@ -15,12 +15,12 @@ func TestAdapterMissingCredentialReturnsInternalError(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{name: "generate", call: func() error {
-			_, err := adapter.Generate(context.Background(), domain.GenerateRequest{}, model)
+		{name: "complete", call: func() error {
+			_, _, err := adapter.Complete(context.Background(), []byte(`{"messages":[]}`), model)
 			return err
 		}},
 		{name: "stream", call: func() error {
-			_, err := adapter.StreamGenerate(context.Background(), domain.GenerateRequest{}, model)
+			_, err := adapter.Stream(context.Background(), []byte(`{"messages":[]}`), model)
 			return err
 		}},
 	}

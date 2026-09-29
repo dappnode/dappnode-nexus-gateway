@@ -38,19 +38,3 @@ type TinfoilTransportProof struct {
 	CreatedAt                time.Time
 	VerifiedAt               *time.Time
 }
-
-// TinfoilProofListParams describes a user-facing proof history query.
-type TinfoilProofListParams struct {
-	Offset int
-	Limit  int
-	Status string
-	Query  string
-}
-
-// TinfoilTransportProofRecord enriches a proof with safe API key context for
-// dashboard history views. It never contains raw API key material.
-type TinfoilTransportProofRecord struct {
-	Proof        TinfoilTransportProof
-	APIKeyName   *string
-	APIKeyPrefix *string
-}

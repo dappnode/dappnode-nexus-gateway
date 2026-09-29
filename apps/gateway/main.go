@@ -18,7 +18,6 @@ import (
 	meteringadapter "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/metering"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/pii/presidio"
-	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/anthropic"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/openai"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/registry"
 	tinfoilprovider "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/tinfoil"
@@ -68,10 +67,9 @@ func main() {
 
 	ctx := context.Background()
 	providerRegistry := registry.NewRegistry()
-	providerRegistry.Register("anthropic", anthropic.NewAdapter(providerTimeout))
 	providerRegistry.Register("tinfoil", tinfoilprovider.NewAdapter(providerTimeout, zapLogger))
-	// Any provider not explicitly registered falls back to the OpenAI-compatible adapter.
-	// This allows adding new providers (e.g. novita, mistral) via DB only — no code changes.
+	// Every other provider speaks the OpenAI wire format, so new ones (e.g.
+	// novita, mistral) are added in the database only.
 	providerRegistry.SetDefault(openai.NewAdapter(providerTimeout, zapLogger))
 
 	meteringClient := meteringadapter.NewClient(meteringURL, meteringToken, 5*time.Second)

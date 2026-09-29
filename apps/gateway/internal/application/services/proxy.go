@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,22 +12,17 @@ import (
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
-	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/observability/logfields"
 	"github.com/google/uuid"
 )
 
-// ErrNotProxyable means a request needs the translating path: PII masking
-// rewrites content, and providers without the OpenAI wire format (Anthropic)
-// need translation. It is returned before anything is reserved or sent.
-var ErrNotProxyable = errors.New("request needs the translating path")
-
 // maxSSELine bounds one SSE line (a whole tool call can arrive in one).
 const maxSSELine = 16 << 20
 
-// ProxyCall is a request the gateway proxies: the provider's response goes to
-// the client as it came, except the model field, which names the public model.
+// ProxyCall is a proxied request: the provider's response goes to the client
+// as it came, except the model field (the public model) and, for keys that
+// mask PII, the restored text.
 type ProxyCall struct {
 	Model domain.PublicModel
 	// Stream is set for streaming requests.
@@ -37,9 +31,10 @@ type ProxyCall struct {
 	Body []byte
 }
 
-// Proxy runs a chat-completions request as a proxy. The gateway authenticates,
-// routes, validates, reserves credit, and meters usage it reads from the
-// response; it never rebuilds the request or the response.
+// Proxy runs a chat-completions request. The gateway authenticates, routes,
+// validates, masks PII for keys that ask for it, reserves credit, and meters
+// the usage it reads from the response; it never rebuilds the request or the
+// response.
 func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte, req domain.GenerateRequest, bearerToken string) (*ProxyCall, error) {
 	start := time.Now()
 	requestID := middleware.GetRequestID(ctx)
@@ -49,23 +44,18 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
 		return nil, err
 	}
-	if s.masksPII(authCtx.APIKey.PIIMode) {
-		return nil, ErrNotProxyable
-	}
 	model, execReq, err := s.resolveModel(ctx, req)
 	if err != nil {
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
 		return nil, err
 	}
-	if _, ok := s.proxyProvider(model); !ok {
-		return nil, ErrNotProxyable
-	}
-	if model.Fallback != nil {
-		if _, ok := s.proxyProvider(withProviderTarget(model, *model.Fallback)); !ok {
-			model.Fallback = nil // Only fall back to a provider that can proxy.
-		}
-	}
 	if err := s.validateRequest(endpoint, execReq, model); err != nil {
+		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
+		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
+		return nil, err
+	}
+	masked, mapping, err := s.maskBody(ctx, raw, authCtx.APIKey.PIIMode)
+	if err != nil {
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
 		return nil, err
@@ -76,19 +66,27 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		return nil, err
 	}
 	finish := func(target domain.PublicModel, o outcome) {
+		o.err = sanitizeErrorWithPIIMapping(o.err, mapping)
 		s.finishProxy(ctx, authCtx, endpoint, execReq, target, requestID, reservationID, start, o)
+	}
+	unmask := func(target domain.PublicModel) *unmasker {
+		return newUnmasker(mapping, s.logger, "request_id", requestID, "endpoint", endpoint, "model", execReq.PublicModelID,
+			"provider", target.ProviderConfig.ProviderName, "pii_mode", authCtx.APIKey.PIIMode)
 	}
 
 	attempt := func(target domain.PublicModel) (*ProxyCall, error) {
-		provider, _ := s.proxyProvider(target)
+		provider, err := s.registry.GetProvider(target.ProviderConfig.ProviderName)
+		if err != nil {
+			return nil, domain.ErrProviderUnavailable(target.ProviderConfig.ProviderName)
+		}
 		upstreamStart := time.Now()
 		if !execReq.Stream {
-			body, proof, err := provider.ProxyJSON(ctx, raw, target)
+			body, proof, err := provider.Complete(ctx, masked, target)
 			recordUpstreamLatency(execReq.PublicModelID, target.ProviderConfig.ProviderName, upstreamStart, err)
 			if err != nil {
 				return nil, err
 			}
-			rewritten, o, err := observeJSON(body, target.PublicModelID)
+			rewritten, o, err := observeJSON(body, target.PublicModelID, unmask(target))
 			if err != nil {
 				return nil, err
 			}
@@ -96,7 +94,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 			finish(target, o)
 			return &ProxyCall{Model: target, Body: rewritten}, nil
 		}
-		resp, err := provider.ProxyStream(ctx, raw, target)
+		resp, err := provider.Stream(ctx, masked, target)
 		recordUpstreamLatency(execReq.PublicModelID, target.ProviderConfig.ProviderName, upstreamStart, err)
 		if err != nil {
 			return nil, err
@@ -104,6 +102,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		stream := newProxyStream(resp.Body, target.PublicModelID)
 		stream.proof = resp.Proof
 		stream.hideUsage = !wantsUsage(raw)
+		stream.unmask = unmask(target)
 		// Nothing has reached the client yet: an upstream that fails before its
 		// first output can still fall back.
 		if err := stream.prime(); err != nil {
@@ -118,33 +117,18 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 	executed := model
 	if err != nil && shouldTryFallback(ctx, err, model.Fallback) {
 		executed = withProviderTarget(model, *model.Fallback)
-		s.logFallback(requestID, model, executed, err)
+		s.logFallback(requestID, model, executed, sanitizeErrorWithPIIMapping(err, mapping))
 		call, err = attempt(executed)
 	}
 	if err != nil {
+		err = sanitizeErrorWithPIIMapping(err, mapping)
 		fields := s.buildErrorLogFields(ctx, requestID, &authCtx, endpoint, execReq.PublicModelID, executed, err, time.Since(start).Milliseconds())
-		s.logger.Error("provider proxy failed", fields...)
+		s.logger.Error("provider request failed", fields...)
 		s.recordGeneration(metrics.OutcomeError, endpoint, execReq, executed, time.Since(start).Milliseconds())
 		s.recordFailure(ctx, &reservationID, &authCtx, endpoint, &execReq, &executed, err, nil, time.Since(start).Milliseconds())
 		return nil, err
 	}
 	return call, nil
-}
-
-// masksPII reports whether this key's requests have content masked: only
-// when the key asks for it and the filter is on (it is off in production).
-func (s *GenerateService) masksPII(piiMode string) bool {
-	mode, ok := domain.NormalizeAPIKeyPIIMode(piiMode)
-	return (!ok || mode != domain.APIKeyPIIModeOff) && s.pii != nil && s.pii.Enabled()
-}
-
-func (s *GenerateService) proxyProvider(model domain.PublicModel) (ports.ProxyProvider, bool) {
-	provider, err := s.registry.GetProvider(model.ProviderConfig.ProviderName)
-	if err != nil {
-		return nil, false
-	}
-	proxy, ok := provider.(ports.ProxyProvider)
-	return proxy, ok
 }
 
 // outcome is what the gateway read from a proxied response.
@@ -157,7 +141,7 @@ type outcome struct {
 	end        string // How a stream ended, for logs.
 }
 
-// finishProxy meters and logs a proxied response, like the translating path.
+// finishProxy meters and logs a proxied response.
 func (s *GenerateService) finishProxy(ctx context.Context, authCtx domain.AuthContext, endpoint string, req domain.GenerateRequest, model domain.PublicModel, requestID, reservationID string, start time.Time, o outcome) {
 	ctx = context.WithoutCancel(ctx) // Accounting outlives the client.
 	latencyMs := time.Since(start).Milliseconds()
@@ -166,10 +150,10 @@ func (s *GenerateService) finishProxy(ctx context.Context, authCtx domain.AuthCo
 		"account_id", authCtx.Account.ID, "endpoint", endpoint, "model", req.PublicModelID,
 		"provider", model.ProviderConfig.ProviderName, "provider_model", model.UpstreamModelName,
 		"stream", req.Stream, "stream_end", o.end, "finish_reason", logfields.FinishReason(o.finish),
-		"usage_received", o.usage != nil, "usage", o.usage, "latency_ms", latencyMs, "proxy", true,
+		"usage_received", o.usage != nil, "usage", o.usage, "latency_ms", latencyMs,
 	}
 	if o.err != nil {
-		s.logger.Error("proxied generation failed", append(fields, "error_type", fmt.Sprintf("%T", o.err))...)
+		s.logger.Error("generation failed", append(fields, "error_type", fmt.Sprintf("%T", o.err))...)
 		s.recordGeneration(metrics.OutcomeError, endpoint, req, model, latencyMs)
 		s.recordFailure(ctx, &reservationID, &authCtx, endpoint, &req, &model, o.err, o.usage, latencyMs)
 		return
@@ -184,7 +168,7 @@ func (s *GenerateService) finishProxy(ctx context.Context, authCtx domain.AuthCo
 	s.storeTinfoilProof(ctx, authCtx, model, result)
 	metrics.RecordUsage(o.usage, req.PublicModelID, model.ProviderConfig.ProviderName)
 	if o.usage == nil {
-		s.logger.Warn("proxied generation completed without usage", fields...)
+		s.logger.Warn("generation completed without usage", fields...)
 	}
 	s.recordGeneration(metrics.OutcomeSuccess, endpoint, req, model, latencyMs)
 	s.logger.Info("generation completed", append(fields, "gateway_status", 200, "upstream_status", 200)...)
@@ -307,13 +291,17 @@ func rewriteModel(raw []byte, c *chunk, public string) []byte {
 }
 
 // observeJSON reads a non-streaming response.
-func observeJSON(body []byte, public string) ([]byte, outcome, error) {
+func observeJSON(body []byte, public string, unmask *unmasker) ([]byte, outcome, error) {
 	var c chunk
 	if err := json.Unmarshal(body, &c); err != nil {
 		return nil, outcome{}, domain.ErrProviderError(http.StatusBadGateway, "provider returned an invalid response")
 	}
 	if err := c.failure(); err != nil {
 		return nil, outcome{}, err
+	}
+	if unmask != nil {
+		body = unmask.body(body)
+		unmask.report(false)
 	}
 	return rewriteModel(body, &c, public), outcome{providerID: c.ID, finish: c.finishReason(), usage: c.Usage.domain(), end: "complete"}, nil
 }
@@ -333,6 +321,8 @@ type ProxyStream struct {
 	// gateway requests them to meter); usage is still read from them.
 	hideUsage bool
 	skipBlank bool
+	// unmask restores PII placeholders, for keys that mask.
+	unmask *unmasker
 
 	o        outcome
 	sawDone  bool
@@ -366,9 +356,11 @@ func newProxyStream(body io.ReadCloser, public string) *ProxyStream {
 // fall back without the client seeing anything.
 func (p *ProxyStream) prime() error {
 	for p.scanner.Scan() {
-		line, c := p.observe(p.scanner.Bytes())
-		if p.keep(line, c) {
-			p.pending = append(p.pending, line)
+		lines, c := p.observe(p.scanner.Bytes())
+		for _, line := range lines {
+			if p.keep(line, c) {
+				p.pending = append(p.pending, line)
+			}
 		}
 		if p.o.err != nil {
 			return p.o.err
@@ -386,22 +378,26 @@ func (p *ProxyStream) prime() error {
 	return nil
 }
 
-// observe reads one line; data events are parsed for metering and get the
-// public model name.
-func (p *ProxyStream) observe(raw []byte) ([]byte, *chunk) {
+// observe reads one line; data events are parsed for metering, get the
+// public model name, and have PII restored for keys that mask. It returns
+// the lines to send: usually the one it read.
+func (p *ProxyStream) observe(raw []byte) ([][]byte, *chunk) {
 	line := append([]byte(nil), raw...)
 	data, ok := bytes.CutPrefix(line, []byte("data:"))
 	if !ok {
-		return line, nil
+		return [][]byte{line}, nil
 	}
 	data = bytes.TrimPrefix(data, []byte(" "))
 	if string(bytes.TrimSpace(data)) == "[DONE]" {
 		p.sawDone = true
-		return line, nil
+		if tail := p.heldTail(); tail != nil {
+			return [][]byte{tail, {}, line}, nil
+		}
+		return [][]byte{line}, nil
 	}
 	var c chunk
 	if json.Unmarshal(data, &c) != nil {
-		return line, nil
+		return [][]byte{line}, nil
 	}
 	p.chunks++
 	if c.ID != "" {
@@ -417,7 +413,21 @@ func (p *ProxyStream) observe(raw []byte) ([]byte, *chunk) {
 		p.o.err = err
 	}
 	prefix := line[:len(line)-len(data)]
-	return append(append([]byte(nil), prefix...), rewriteModel(data, &c, p.public)...), &c
+	if p.unmask != nil && len(c.Choices) > 0 {
+		data = p.unmask.event(data)
+	}
+	return [][]byte{append(append([]byte(nil), prefix...), rewriteModel(data, &c, p.public)...)}, &c
+}
+
+// heldTail returns an event with PII-restored text still held back, if any.
+func (p *ProxyStream) heldTail() []byte {
+	if p.unmask == nil {
+		return nil
+	}
+	if tail := p.unmask.tail(p.o.providerID, p.public); tail != nil {
+		return append([]byte("data: "), tail...)
+	}
+	return nil
 }
 
 // keep reports whether a line goes to the client: everything does, except a
@@ -444,9 +454,19 @@ func (p *ProxyStream) Next() ([]byte, error) {
 		return line, nil
 	}
 	for p.scanner.Scan() {
-		if line, c := p.observe(p.scanner.Bytes()); p.keep(line, c) {
-			return line, nil
+		lines, c := p.observe(p.scanner.Bytes())
+		for _, line := range lines {
+			if p.keep(line, c) {
+				p.pending = append(p.pending, line)
+			}
 		}
+		if len(p.pending) > 0 {
+			return p.Next()
+		}
+	}
+	if tail := p.heldTail(); tail != nil {
+		p.pending = append(p.pending, tail, []byte{})
+		return p.Next()
 	}
 	err := p.scanner.Err()
 	switch {
@@ -498,6 +518,9 @@ func (p *ProxyStream) end(how string) {
 	p.finished = true
 	p.o.end = how
 	p.o.proof = p.proof
+	if p.unmask != nil {
+		p.unmask.report(true)
+	}
 	if p.onEnd != nil {
 		p.onEnd(p.o)
 	}
