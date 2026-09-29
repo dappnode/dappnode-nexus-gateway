@@ -92,3 +92,21 @@ func TestPrepareProxyBody_Edits(t *testing.T) {
 		}
 	})
 }
+
+// The provider policies, for requests the old translating path also covered.
+func TestPrepareProxyBody_ProviderPolicies(t *testing.T) {
+	// No limit from the client means no limit sent.
+	if got := prepared(t, `{"messages":[]}`, "novita", false); len(got) != 2 {
+		t.Fatalf("limit invented: %v", got)
+	}
+	// DeepSeek keeps the reasoning the client sent back.
+	raw := `{"messages":[{"role":"assistant","content":"x","reasoning_content":"because","tool_calls":[{"id":"a","type":"function","function":{"name":"f","arguments":"{}"}}]}]}`
+	msg := prepared(t, raw, "deepseek", false)["messages"].([]any)[0].(map[string]any)
+	if msg["reasoning_content"] != "because" || msg["content"] != "x" {
+		t.Fatalf("assistant message changed: %v", msg)
+	}
+	// OpenAI itself gets the developer role.
+	if role := prepared(t, `{"messages":[{"role":"developer","content":"x"}]}`, "openai", false)["messages"].([]any)[0].(map[string]any)["role"]; role != "developer" {
+		t.Fatalf("role = %v", role)
+	}
+}

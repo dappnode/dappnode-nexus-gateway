@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 	verifierclient "github.com/tinfoilsh/tinfoil-go/verifier/client"
 )
 
-func TestGenerateUsesVerifiedClientAndStoresProofEvidence(t *testing.T) {
+func TestCompleteUsesVerifiedClientAndReturnsProofEvidence(t *testing.T) {
 	t.Setenv("TINFOIL_API_KEY", "test-key")
 
 	var seenRequest bool
@@ -31,7 +32,7 @@ func TestGenerateUsesVerifiedClientAndStoresProofEvidence(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body["model"] != "kimi-k2-6" || body["stream"] != false {
+		if body["model"] != "kimi-k2-6" || body["stream"] == true {
 			t.Fatalf("unexpected request body: %#v", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -46,31 +47,28 @@ func TestGenerateUsesVerifiedClientAndStoresProofEvidence(t *testing.T) {
 	t.Setenv("TINFOIL_PROXY_BASE_URL", server.URL)
 
 	factory := &fakeFactory{client: fakeClient(server.Client())}
-	result, err := NewAdapterWithFactory(time.Second, factory).Generate(context.Background(), simpleRequest(false), simpleModel(server.URL))
+	body, proof, err := NewAdapterWithFactory(time.Second, factory).Complete(context.Background(), simpleRequest(), simpleModel(server.URL))
 	if err != nil {
-		t.Fatalf("Generate returned error: %v", err)
+		t.Fatalf("Complete returned error: %v", err)
 	}
 	if !seenRequest {
 		t.Fatalf("provider request was not sent")
 	}
-	if result.ID != "cmpl-tinfoil-1" || result.TinfoilProof == nil {
-		t.Fatalf("unexpected result/proof: id=%q proof=%#v", result.ID, result.TinfoilProof)
+	if !strings.Contains(string(body), `"id":"cmpl-tinfoil-1"`) || proof == nil {
+		t.Fatalf("unexpected body/proof: body=%s proof=%#v", body, proof)
 	}
-	if result.TinfoilProof.ProviderResponseID != "cmpl-tinfoil-1" {
-		t.Fatalf("proof response id was not filled: %#v", result.TinfoilProof.ProviderResponseID)
+	if proof.EnclaveHost == nil || *proof.EnclaveHost != "inference.tinfoil.sh" {
+		t.Fatalf("unexpected enclave host in proof: %#v", proof.EnclaveHost)
 	}
-	if result.TinfoilProof.EnclaveHost == nil || *result.TinfoilProof.EnclaveHost != "inference.tinfoil.sh" {
-		t.Fatalf("unexpected enclave host in proof: %#v", result.TinfoilProof.EnclaveHost)
+	if proof.TransportMode == nil || *proof.TransportMode != "ehbp" {
+		t.Fatalf("unexpected transport mode in proof: %#v", proof.TransportMode)
 	}
-	if result.TinfoilProof.TransportMode == nil || *result.TinfoilProof.TransportMode != "ehbp" {
-		t.Fatalf("unexpected transport mode in proof: %#v", result.TinfoilProof.TransportMode)
-	}
-	if len(result.TinfoilProof.VerificationEvidenceJSON) == 0 {
+	if len(proof.VerificationEvidenceJSON) == 0 {
 		t.Fatalf("expected verification evidence JSON")
 	}
 }
 
-func TestStreamGenerateReturnsVerifiedTransportProof(t *testing.T) {
+func TestStreamReturnsBodyAndVerifiedTransportProof(t *testing.T) {
 	t.Setenv("TINFOIL_API_KEY", "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,54 +80,30 @@ func TestStreamGenerateReturnsVerifiedTransportProof(t *testing.T) {
 	defer server.Close()
 	t.Setenv("TINFOIL_PROXY_BASE_URL", server.URL)
 
-	stream, err := NewAdapterWithFactory(time.Second, &fakeFactory{client: fakeClient(server.Client())}).StreamGenerate(
+	stream, err := NewAdapterWithFactory(time.Second, &fakeFactory{client: fakeClient(server.Client())}).Stream(
 		context.Background(),
-		simpleRequest(true),
+		simpleRequest(),
 		simpleModel(server.URL),
 	)
 	if err != nil {
-		t.Fatalf("StreamGenerate returned error: %v", err)
+		t.Fatalf("Stream returned error: %v", err)
 	}
-	defer stream.Close()
-
-	var text string
-	var completed bool
-	for {
-		event, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			t.Fatalf("Recv returned error: %v", recvErr)
-		}
-		if event.ContentDelta != nil {
-			text += *event.ContentDelta
-		}
-		if event.Type == domain.StreamEventCompleted {
-			completed = true
-		}
+	defer stream.Body.Close()
+	body, _ := io.ReadAll(stream.Body)
+	if !strings.Contains(string(body), `"content":"hi"`) || !strings.Contains(string(body), "[DONE]") {
+		t.Fatalf("stream not returned as sent: %s", body)
 	}
-	if text != "hi" || !completed {
-		t.Fatalf("unexpected stream events: text=%q completed=%v", text, completed)
-	}
-	proofProvider, ok := stream.(interface {
-		VerifiedTransportProof() *domain.TinfoilTransportProof
-	})
-	if !ok {
-		t.Fatalf("stream does not expose proof evidence")
-	}
-	proof := proofProvider.VerifiedTransportProof()
-	if proof == nil || proof.TransportMode == nil || *proof.TransportMode != "ehbp" {
-		t.Fatalf("unexpected stream proof: %#v", proof)
+	if stream.Proof == nil || stream.Proof.TransportMode == nil || *stream.Proof.TransportMode != "ehbp" {
+		t.Fatalf("unexpected stream proof: %#v", stream.Proof)
 	}
 }
 
-func TestGenerateFailsClosedWhenAttestationFails(t *testing.T) {
+func TestFailsClosedWhenAttestationFails(t *testing.T) {
 	t.Setenv("TINFOIL_API_KEY", "test-key")
 
 	var called bool
 	factory := &fakeFactory{err: errors.New("attestation failed"), onCall: func() { called = true }}
-	_, err := NewAdapterWithFactory(time.Second, factory).Generate(context.Background(), simpleRequest(false), simpleModel("https://example.invalid/v1"))
+	_, _, err := NewAdapterWithFactory(time.Second, factory).Complete(context.Background(), simpleRequest(), simpleModel("https://example.invalid/v1"))
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -142,12 +116,12 @@ func TestGenerateFailsClosedWhenAttestationFails(t *testing.T) {
 	}
 }
 
-func TestGenerateDoesNotVerifyWithoutAPIKey(t *testing.T) {
+func TestDoesNotVerifyWithoutAPIKey(t *testing.T) {
 	t.Setenv("TINFOIL_API_KEY", "")
 
 	var called bool
 	factory := &fakeFactory{client: fakeClient(http.DefaultClient), onCall: func() { called = true }}
-	_, err := NewAdapterWithFactory(time.Second, factory).Generate(context.Background(), simpleRequest(false), simpleModel("https://example.invalid/v1"))
+	_, _, err := NewAdapterWithFactory(time.Second, factory).Complete(context.Background(), simpleRequest(), simpleModel("https://example.invalid/v1"))
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -156,7 +130,7 @@ func TestGenerateDoesNotVerifyWithoutAPIKey(t *testing.T) {
 	}
 }
 
-func TestGenerateMapsProviderErrors(t *testing.T) {
+func TestMapsProviderErrors(t *testing.T) {
 	t.Setenv("TINFOIL_API_KEY", "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -166,9 +140,9 @@ func TestGenerateMapsProviderErrors(t *testing.T) {
 	defer server.Close()
 	t.Setenv("TINFOIL_PROXY_BASE_URL", server.URL)
 
-	_, err := NewAdapterWithFactory(time.Second, &fakeFactory{client: fakeClient(server.Client())}).Generate(
+	_, _, err := NewAdapterWithFactory(time.Second, &fakeFactory{client: fakeClient(server.Client())}).Complete(
 		context.Background(),
-		simpleRequest(false),
+		simpleRequest(),
 		simpleModel(server.URL),
 	)
 	var gwErr *domain.GatewayError
@@ -201,18 +175,9 @@ func TestRequestURLUsesExplicitProxyBaseURL(t *testing.T) {
 	}
 }
 
-func simpleRequest(stream bool) domain.GenerateRequest {
-	role := "user"
-	content := "hello"
-	return domain.GenerateRequest{
-		PublicModelID: "tinfoil/kimi-k2-6",
-		Stream:        stream,
-		Input: []domain.InputItem{{
-			Type:    domain.InputItemTypeMessage,
-			Role:    &role,
-			Content: &content,
-		}},
-	}
+// simpleRequest is a client's chat request body.
+func simpleRequest() []byte {
+	return []byte(`{"model":"private/kimi-k3","messages":[{"role":"user","content":"hello"}]}`)
 }
 
 func simpleModel(baseURL string) domain.PublicModel {

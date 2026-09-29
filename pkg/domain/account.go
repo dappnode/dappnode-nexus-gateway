@@ -96,20 +96,6 @@ func NormalizeAPIKeyPIIMode(mode string) (string, bool) {
 	}
 }
 
-// CreateAPIKeyParams holds parameters for creating a new API key.
-type CreateAPIKeyParams struct {
-	AccountID string
-	Name      *string
-	PIIMode   string
-	ExpiresAt *time.Time
-}
-
-// CreateAPIKeyResult is returned after key creation, including the raw key shown only once.
-type CreateAPIKeyResult struct {
-	APIKey APIKey
-	RawKey string
-}
-
 // AuthContext carries the authenticated account and API key for a request.
 type AuthContext struct {
 	Account Account

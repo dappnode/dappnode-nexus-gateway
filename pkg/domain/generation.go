@@ -5,60 +5,51 @@ const (
 	EndpointChatCompletions = "chat_completions"
 )
 
-// ResponseTextConfig configures structured text output.
-type ResponseTextConfig struct {
-	FormatType *string
-	JSONSchema map[string]any
-}
-
-// GenerateRequest is the canonical internal generation request.
+// GenerateRequest is what the gateway reads from a client's request: enough
+// to route, check the model's features, and meter. The request body itself is
+// forwarded to the provider as sent.
 type GenerateRequest struct {
-	PublicModelID       string
-	RequestedModelID    string
-	RouterID            *string
-	RoutedPublicModelID *string
+	PublicModelID    string
+	RequestedModelID string
 	// Routing decision metadata. Set when the request was resolved via a
 	// router; nil for direct model requests.
+	RouterID              *string
+	RoutedPublicModelID   *string
 	MatchedCategory       *string
 	RoutingScore          *float32
 	RoutingCategoryScores []RoutingCategoryScore
 	DecisionReason        *string
 	FallbackUsed          *bool
-	Input                 []InputItem
-	Instructions          *string
-	MaxOutputTokens       *int
-	Temperature           *float64
-	ReasoningEffort       *string
-	TopP                  *float64
-	Stop                  []string
-	Stream                bool
-	Tools                 []ToolDefinition
-	ToolChoice            *ToolChoice
-	ParallelToolCalls     *bool
-	User                  *string
-	Metadata              map[string]any
-	TextConfig            *ResponseTextConfig
-	ProviderOptions       map[string]any
 
-	// Pass-through parameters (forwarded to providers that support them)
-	PresencePenalty  *float64       `json:"presence_penalty,omitempty"`
-	FrequencyPenalty *float64       `json:"frequency_penalty,omitempty"`
-	LogitBias        map[string]int `json:"logit_bias,omitempty"`
-	Seed             *int           `json:"seed,omitempty"`
-	Logprobs         *bool          `json:"logprobs,omitempty"`
-	TopLogprobs      *int           `json:"top_logprobs,omitempty"`
-	Store            *bool          `json:"store,omitempty"`
-	ServiceTier      *string        `json:"service_tier,omitempty"`
+	// Input and Tools are what routers read: each message's role and text,
+	// and the tool names.
+	Input []InputItem
+	Tools []ToolDefinition
+
+	Stream            bool
+	MaxOutputTokens   *int
+	ParallelToolCalls *bool
+	// StructuredOutput is set when the client asks for JSON output.
+	StructuredOutput bool
 }
 
-// GenerateResult is the canonical internal generation result.
+// InputItem is one message: its role and text.
+type InputItem struct {
+	Role    *string
+	Content *string
+}
+
+// ToolDefinition names a function tool offered to the model.
+type ToolDefinition struct {
+	Name string
+}
+
+// GenerateResult is what the gateway read from a provider's response.
 type GenerateResult struct {
 	ID              string
-	CreatedUnix     int64
 	PublicModelID   string
 	ProviderName    string
 	ProviderModelID string
-	Output          []OutputItem
 	FinishReason    *string
 	Usage           *Usage
 	TinfoilProof    *TinfoilTransportProof

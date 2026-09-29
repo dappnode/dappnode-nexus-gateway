@@ -74,21 +74,3 @@ type ModelCatalogEntry struct {
 	Router       *RouterEntry
 	EURToUSDRate float64
 }
-
-// RouterCategory is a strategy-specific routing target managed by the router
-// service.  The control plane treats categories as opaque metadata it can
-// proxy on behalf of the admin UI.
-type RouterCategory struct {
-	ID            string
-	RouterID      string
-	Name          string
-	PublicModelID string
-	Threshold     float32
-}
-
-// RouterCategoryInput is the create/update payload for a router category.
-type RouterCategoryInput struct {
-	Name          string
-	PublicModelID string
-	Threshold     float32
-}

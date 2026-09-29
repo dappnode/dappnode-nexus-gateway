@@ -149,30 +149,30 @@ func dedupe(list []string) []string {
 	return out
 }
 
-// ProxyStream forwards a streaming request, with the same retries as the
-// translating path, and returns the provider's SSE body untouched.
-func (a *Adapter) ProxyStream(ctx context.Context, raw []byte, model domain.PublicModel) (ports.ProxyResponse, error) {
-	body, _, err := PrepareProxyBody(raw, model, true)
+// Stream forwards a streaming request, with the provider's retry policy,
+// and returns the provider's SSE body untouched.
+func (a *Adapter) Stream(ctx context.Context, raw []byte, model domain.PublicModel) (ports.ProviderStream, error) {
+	body, transforms, err := PrepareProxyBody(raw, model, true)
 	if err != nil {
-		return ports.ProxyResponse{}, err
+		return ports.ProviderStream{}, err
 	}
-	resp, err := a.proxy(ctx, body, model, func(ctx context.Context, apiKey string, body map[string]any) (*http.Response, error) {
+	resp, err := a.proxy(ctx, body, transforms, model, func(ctx context.Context, apiKey string, body map[string]any) (*http.Response, error) {
 		return a.client.DoStream(ctx, model.ProviderConfig.BaseURL, apiKey, body)
 	})
 	if err != nil {
-		return ports.ProxyResponse{}, err
+		return ports.ProviderStream{}, err
 	}
-	return ports.ProxyResponse{Body: resp.Body}, nil
+	return ports.ProviderStream{Body: resp.Body}, nil
 }
 
-// ProxyJSON forwards a non-streaming request and returns the provider's JSON.
-func (a *Adapter) ProxyJSON(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
-	body, _, err := PrepareProxyBody(raw, model, false)
+// Complete forwards a non-streaming request and returns the provider's JSON.
+func (a *Adapter) Complete(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
+	body, transforms, err := PrepareProxyBody(raw, model, false)
 	if err != nil {
 		return nil, nil, err
 	}
 	var out []byte
-	_, err = a.proxy(ctx, body, model, func(ctx context.Context, apiKey string, body map[string]any) (*http.Response, error) {
+	_, err = a.proxy(ctx, body, transforms, model, func(ctx context.Context, apiKey string, body map[string]any) (*http.Response, error) {
 		var err error
 		out, err = a.client.Do(ctx, model.ProviderConfig.BaseURL, apiKey, body)
 		if err != nil {
@@ -184,13 +184,13 @@ func (a *Adapter) ProxyJSON(ctx context.Context, raw []byte, model domain.Public
 }
 
 // proxy sends body with the provider's retry policy (Novita's transient
-// rejections), and maps errors like the translating path.
-func (a *Adapter) proxy(ctx context.Context, body map[string]any, model domain.PublicModel, send func(context.Context, string, map[string]any) (*http.Response, error)) (*http.Response, error) {
+// rejections), and maps provider errors to gateway errors.
+func (a *Adapter) proxy(ctx context.Context, body map[string]any, transforms []string, model domain.PublicModel, send func(context.Context, string, map[string]any) (*http.Response, error)) (*http.Response, error) {
 	apiKey := resolveAPIKey(model.ProviderConfig.APIKeySecretRef)
 	if apiKey == "" {
 		return nil, missingProviderCredentialError(model.ProviderConfig.ProviderName)
 	}
-	built := builtProviderRequest{Body: body, Policy: policyForProvider(model.ProviderConfig.ProviderName).name}
+	built := builtProviderRequest{Body: body, Policy: policyForProvider(model.ProviderConfig.ProviderName).name, Transforms: transforms}
 	active := built
 	var retryReason string
 	invalidTraceRetries, overloadRetries := 0, 0
@@ -215,7 +215,7 @@ func (a *Adapter) proxy(ctx context.Context, body map[string]any, model domain.P
 				downgradeRetried = true
 				retryReason = retry.RetryReason
 				metrics.ProviderRetries.WithLabelValues(model.ProviderConfig.ProviderName, retryReason).Inc()
-				active = builtProviderRequest{Body: retry.Body, Policy: built.Policy, Omitted: retry.Omitted}
+				active = builtProviderRequest{Body: retry.Body, Policy: built.Policy, Transforms: transforms, Omitted: retry.Omitted}
 				if !sleepBeforeProviderRetry(ctx, retryReason) {
 					return nil, withProviderPolicyMeta(mapProviderError(context.Cause(ctx), model.ProviderConfig.ProviderName), active, attempt, retryReason)
 				}

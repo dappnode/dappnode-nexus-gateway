@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -11,30 +10,7 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
 
-// proxyStub is an OpenAI-compatible provider that returns canned bodies.
-type proxyStub struct {
-	stubProvider
-	sse     string
-	json    string
-	err     error
-	calls   int
-	lastRaw string
-}
-
-func (p *proxyStub) ProxyStream(_ context.Context, raw []byte, _ domain.PublicModel) (ports.ProxyResponse, error) {
-	p.calls++
-	p.lastRaw = string(raw)
-	if p.err != nil {
-		return ports.ProxyResponse{}, p.err
-	}
-	return ports.ProxyResponse{Body: io.NopCloser(strings.NewReader(p.sse))}, nil
-}
-
-func (p *proxyStub) ProxyJSON(_ context.Context, raw []byte, _ domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
-	p.calls++
-	p.lastRaw = string(raw)
-	return []byte(p.json), nil, p.err
-}
+type proxyStub = stubProvider
 
 // resultMeter records what was metered.
 type resultMeter struct {
@@ -53,7 +29,7 @@ func (m *resultMeter) RecordFailure(ctx context.Context, id *string, a *domain.A
 	return m.stubUsageMeter.RecordFailure(ctx, id, a, e, req, model, err, u, l)
 }
 
-func proxyService(meter *resultMeter, pii string, providers map[string]ports.GenerationProvider, fallback bool) *GenerateService {
+func proxyService(meter *resultMeter, pii string, providers map[string]ports.Provider, fallback bool) *GenerateService {
 	model := domain.PublicModel{
 		PublicModelID: "zai-org/glm-5.3-flash", ProviderModelID: "pm", UpstreamModelName: "glm-5-3-flash",
 		ProviderConfig:          domain.ProviderConfig{ProviderName: "primary"},
@@ -104,7 +80,7 @@ func TestProxyStream_ForwardsProviderBytes(t *testing.T) {
 		"data: [DONE]\n\n"
 	primary := &proxyStub{sse: upstream}
 	meter := &resultMeter{}
-	svc := proxyService(meter, "", map[string]ports.GenerationProvider{"primary": primary}, false)
+	svc := proxyService(meter, "", map[string]ports.Provider{"primary": primary}, false)
 	call, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{"model":"zai-org/glm-5.3-flash","stream_options":{"include_usage":true}}`), streamRequest(), "key")
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +104,7 @@ func TestProxyStream_FallsBackBeforeFirstOutput(t *testing.T) {
 	primary := &proxyStub{sse: "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"error\":{\"message\":\"overloaded\"}}\n\n"}
 	fallback := &proxyStub{sse: "data: {\"id\":\"y\",\"model\":\"glm-fallback\",\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"}
 	meter := &resultMeter{}
-	svc := proxyService(meter, "", map[string]ports.GenerationProvider{"primary": primary, "fallback": fallback}, true)
+	svc := proxyService(meter, "", map[string]ports.Provider{"primary": primary, "fallback": fallback}, true)
 	call, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), streamRequest(), "key")
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +121,7 @@ func TestProxyStream_FallsBackBeforeFirstOutput(t *testing.T) {
 func TestProxyStream_ErrorAfterOutputIsForwardedAndNotBilledAsSuccess(t *testing.T) {
 	primary := &proxyStub{sse: "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\ndata: {\"error\":{\"message\":\"overloaded\"}}\n\n"}
 	meter := &resultMeter{}
-	svc := proxyService(meter, "", map[string]ports.GenerationProvider{"primary": primary}, false)
+	svc := proxyService(meter, "", map[string]ports.Provider{"primary": primary}, false)
 	call, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), streamRequest(), "key")
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +138,7 @@ func TestProxyStream_ErrorAfterOutputIsForwardedAndNotBilledAsSuccess(t *testing
 func TestProxyStream_EmptyStreamIsAProviderError(t *testing.T) {
 	primary := &proxyStub{sse: ""}
 	meter := &resultMeter{}
-	svc := proxyService(meter, "", map[string]ports.GenerationProvider{"primary": primary}, false)
+	svc := proxyService(meter, "", map[string]ports.Provider{"primary": primary}, false)
 	if _, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), streamRequest(), "key"); err == nil {
 		t.Fatal("empty stream accepted")
 	}
@@ -176,7 +152,7 @@ func TestProxyStream_ClientLeaving(t *testing.T) {
 	for name, lines := range map[string]int{"before finish": 1, "after finish": 3} {
 		t.Run(name, func(t *testing.T) {
 			meter := &resultMeter{}
-			svc := proxyService(meter, "", map[string]ports.GenerationProvider{"primary": &proxyStub{sse: body}}, false)
+			svc := proxyService(meter, "", map[string]ports.Provider{"primary": &proxyStub{sse: body}}, false)
 			call, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), streamRequest(), "key")
 			if err != nil {
 				t.Fatal(err)
@@ -198,7 +174,7 @@ func TestProxyStream_ClientLeaving(t *testing.T) {
 func TestProxyJSON(t *testing.T) {
 	primary := &proxyStub{json: `{"id":"r1","model":"glm-5-3-flash","choices":[{"message":{"role":"assistant","content":"hi","reasoning_content":"why"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`}
 	meter := &resultMeter{}
-	svc := proxyService(meter, "", map[string]ports.GenerationProvider{"primary": primary}, false)
+	svc := proxyService(meter, "", map[string]ports.Provider{"primary": primary}, false)
 	call, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{PublicModelID: "zai-org/glm-5.3-flash"}, "key")
 	if err != nil {
 		t.Fatal(err)
@@ -215,26 +191,11 @@ func TestProxyJSON(t *testing.T) {
 	}
 }
 
-func TestProxy_PIIKeysAndOtherWireFormatsTranslate(t *testing.T) {
-	meter := &resultMeter{}
-	svc := proxyService(meter, "balanced", map[string]ports.GenerationProvider{"primary": &proxyStub{}}, false)
-	if _, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), streamRequest(), "key"); !errors.Is(err, ErrNotProxyable) {
-		t.Fatalf("PII key proxied: %v", err)
-	}
-	svc = proxyService(meter, "", map[string]ports.GenerationProvider{"primary": &stubProvider{}}, false)
-	if _, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), streamRequest(), "key"); !errors.Is(err, ErrNotProxyable) {
-		t.Fatalf("non-OpenAI provider proxied: %v", err)
-	}
-	if meter.reserveCalls != 0 {
-		t.Fatal("reserved before choosing the path")
-	}
-}
-
 // With the PII filter off (as in production), a key's PII mode masks
 // nothing, so its requests are proxied too.
 func TestProxy_PIIModeWithFilterOffProxies(t *testing.T) {
 	meter := &resultMeter{}
-	svc := proxyService(meter, "", map[string]ports.GenerationProvider{"primary": &proxyStub{json: `{"id":"r","choices":[]}`}}, false)
+	svc := proxyService(meter, "", map[string]ports.Provider{"primary": &proxyStub{json: `{"id":"r","choices":[]}`}}, false)
 	svc.auth = &stubAuthService{authCtx: domain.AuthContext{Account: domain.Account{ID: "acc1", Status: domain.AccountStatusActive}, APIKey: domain.APIKey{ID: "key1", Active: true, PIIMode: "high"}}}
 	if _, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{PublicModelID: "zai-org/glm-5.3-flash"}, "key"); err != nil {
 		t.Fatalf("not proxied: %v", err)
@@ -246,7 +207,7 @@ func TestProxy_PIIModeWithFilterOffProxies(t *testing.T) {
 func TestProxyStream_UnrequestedUsageIsMeteredNotForwarded(t *testing.T) {
 	body := "data: {\"choices\":[{\"delta\":{\"content\":\"a\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n"
 	meter := &resultMeter{}
-	svc := proxyService(meter, "", map[string]ports.GenerationProvider{"primary": &proxyStub{sse: body}}, false)
+	svc := proxyService(meter, "", map[string]ports.Provider{"primary": &proxyStub{sse: body}}, false)
 	call, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{"stream":true}`), streamRequest(), "key")
 	if err != nil {
 		t.Fatal(err)

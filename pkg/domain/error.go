@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -86,14 +85,6 @@ func ErrInvalidAPIKey(msg string) *GatewayError {
 	return &GatewayError{HTTPStatus: 401, Type: ErrTypeAuthentication, Code: ErrCodeInvalidAPIKey, Message: msg}
 }
 
-func ErrInactiveAPIKey() *GatewayError {
-	return &GatewayError{HTTPStatus: 401, Type: ErrTypeAuthentication, Code: ErrCodeInactiveAPIKey, Message: "API key is inactive"}
-}
-
-func ErrInactiveAccount() *GatewayError {
-	return &GatewayError{HTTPStatus: 403, Type: ErrTypePermission, Code: ErrCodeInactiveAccount, Message: "Account is inactive"}
-}
-
 func ErrUnsupportedModel(model string) *GatewayError {
 	return &GatewayError{HTTPStatus: 404, Type: ErrTypeInvalidRequest, Code: ErrCodeUnsupportedModel, Message: fmt.Sprintf("Model '%s' is not available", model)}
 }
@@ -122,18 +113,6 @@ func ErrInvalidField(msg string) *GatewayError {
 	return &GatewayError{HTTPStatus: 400, Type: ErrTypeInvalidRequest, Code: ErrCodeInvalidField, Message: msg}
 }
 
-func ErrInsufficientBalance() *GatewayError {
-	return &GatewayError{HTTPStatus: 402, Type: ErrTypePermission, Code: ErrCodeInsufficientBalance, Message: "Account has no spendable balance"}
-}
-
-func ErrUnknownField(field string) *GatewayError {
-	return &GatewayError{HTTPStatus: 400, Type: ErrTypeInvalidRequest, Code: ErrCodeUnknownField, Message: fmt.Sprintf("Unknown field: '%s'", field)}
-}
-
-func ErrToolSchemaInvalid(msg string) *GatewayError {
-	return &GatewayError{HTTPStatus: 400, Type: ErrTypeInvalidRequest, Code: ErrCodeToolSchemaInvalid, Message: msg}
-}
-
 func ErrToolMessageInvalid(msg string) *GatewayError {
 	return &GatewayError{HTTPStatus: 400, Type: ErrTypeInvalidRequest, Code: ErrCodeToolMessageInvalid, Message: msg}
 }
@@ -154,27 +133,12 @@ const (
 	ErrCodeAlreadyExists = "already_exists"
 )
 
-func ErrNotFound(resource, id string) *GatewayError {
-	return &GatewayError{HTTPStatus: 404, Type: ErrTypeInvalidRequest, Code: ErrCodeNotFound, Message: fmt.Sprintf("%s '%s' not found", resource, id)}
-}
-
-func ErrForbidden(msg string) *GatewayError {
-	return &GatewayError{HTTPStatus: 403, Type: ErrTypePermission, Code: ErrCodeForbidden, Message: msg}
-}
-
 func ErrConflict(msg string) *GatewayError {
 	return &GatewayError{HTTPStatus: 409, Type: ErrTypeInvalidRequest, Code: ErrCodeConflict, Message: msg}
 }
-
-func ErrAlreadyExists(resource, id string) *GatewayError {
-	return &GatewayError{HTTPStatus: 409, Type: ErrTypeInvalidRequest, Code: ErrCodeAlreadyExists, Message: fmt.Sprintf("%s '%s' already exists", resource, id)}
+func ErrNotFound(resource, id string) *GatewayError {
+	return &GatewayError{HTTPStatus: 404, Type: ErrTypeInvalidRequest, Code: ErrCodeNotFound, Message: fmt.Sprintf("%s '%s' not found", resource, id)}
 }
-
-// IsAlreadyExists returns true if the error is a GatewayError with code already_exists.
-func IsAlreadyExists(err error) bool {
-	var gwErr *GatewayError
-	if errors.As(err, &gwErr) {
-		return gwErr.Code == ErrCodeAlreadyExists
-	}
-	return false
+func ErrInsufficientBalance() *GatewayError {
+	return &GatewayError{HTTPStatus: 402, Type: ErrTypePermission, Code: ErrCodeInsufficientBalance, Message: "Account has no spendable balance"}
 }
