@@ -301,10 +301,7 @@ func rewriteModel(raw []byte, c *chunk, public string) []byte {
 			start++
 		}
 		name, _ := json.Marshal(public)
-		out := make([]byte, 0, len(raw)+len(name))
-		out = append(out, raw[:start]...)
-		out = append(out, name...)
-		return append(out, raw[end:]...)
+		return bytes.Join([][]byte{raw[:start], name, raw[end:]}, nil)
 	}
 	return raw
 }
