@@ -14,7 +14,7 @@ func read(t *testing.T, body string) (domain.GenerateRequest, error) {
 }
 
 func TestChatCompletionRequestToDomain_ReadsTheSummary(t *testing.T) {
-	req, err := read(t, `{"model":"m","stream":true,"max_completion_tokens":50,"parallel_tool_calls":false,
+	req, err := read(t, `{"model":"m","stream":true,"max_completion_tokens":50,"service_tier":"flex","parallel_tool_calls":false,
 		"response_format":{"type":"json_object"},"temperature":0.2,"unknown_extension":{"x":1},
 		"messages":[{"role":"developer","content":"be brief"},
 			{"role":"user","content":[{"type":"text","text":"What is "},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA"}},{"type":"text","text":"this?"}]},
@@ -24,7 +24,7 @@ func TestChatCompletionRequestToDomain_ReadsTheSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.PublicModelID != "m" || !req.Stream || *req.MaxOutputTokens != 50 || *req.ParallelToolCalls || !req.StructuredOutput {
+	if req.PublicModelID != "m" || !req.Stream || *req.MaxOutputTokens != 50 || req.ServiceTier == nil || *req.ServiceTier != "flex" || *req.ParallelToolCalls || !req.StructuredOutput {
 		t.Fatalf("summary %+v", req)
 	}
 	if len(req.Input) != 4 || *req.Input[0].Role != "developer" || *req.Input[1].Content != "What is this?" || req.Input[2].Content != nil || *req.Input[3].Content != "42" {

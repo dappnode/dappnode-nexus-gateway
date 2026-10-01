@@ -28,6 +28,7 @@ type GenerateRequest struct {
 
 	Stream            bool
 	MaxOutputTokens   *int
+	ServiceTier       *string
 	ParallelToolCalls *bool
 	// StructuredOutput is set when the client asks for JSON output.
 	StructuredOutput bool

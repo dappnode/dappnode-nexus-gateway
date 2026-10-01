@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
@@ -22,6 +23,7 @@ var gatewayOnlyFields = []string{"provider_options"}
 // provider extensions). The only edits are:
 //
 //   - model: the provider's name for the public model;
+//   - service_tier: fixed by the catalog for Doubleword models;
 //   - stream_options.include_usage: on for streams, so usage can be metered;
 //   - the output-token limit: clamped to the model's maximum, and sent as
 //     max_tokens to the providers that only document that name (Novita,
@@ -41,6 +43,13 @@ func PrepareProxyBody(raw []byte, model domain.PublicModel, stream bool) (map[st
 	var transforms []string
 
 	body["model"] = model.UpstreamModelName
+	// Doubleword's realtime and async catalog entries select the upstream tier.
+	// Never let a caller change the tier behind a priced public model.
+	if model.ServiceTier != nil && strings.TrimSpace(*model.ServiceTier) != "" {
+		body["service_tier"] = strings.TrimSpace(*model.ServiceTier)
+	} else if strings.EqualFold(model.ProviderConfig.ProviderName, "doubleword") {
+		delete(body, "service_tier")
+	}
 	for _, field := range gatewayOnlyFields {
 		delete(body, field)
 	}

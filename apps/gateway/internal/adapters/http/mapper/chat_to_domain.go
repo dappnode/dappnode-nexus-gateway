@@ -19,6 +19,7 @@ type chatRequest struct {
 	Stream              *bool           `json:"stream"`
 	MaxTokens           *int            `json:"max_tokens"`
 	MaxCompletionTokens *int            `json:"max_completion_tokens"`
+	ServiceTier         *string         `json:"service_tier"`
 	N                   *int            `json:"n"`
 	Tools               []chatTool      `json:"tools"`
 	ToolChoice          json.RawMessage `json:"tool_choice"`
@@ -77,6 +78,7 @@ func ChatCompletionRequestToDomain(raw json.RawMessage) (domain.GenerateRequest,
 		PublicModelID:     req.Model,
 		Stream:            req.Stream != nil && *req.Stream,
 		MaxOutputTokens:   req.MaxTokens,
+		ServiceTier:       req.ServiceTier,
 		ParallelToolCalls: req.ParallelToolCalls,
 		StructuredOutput:  req.ResponseFormat != nil && (req.ResponseFormat.Type == "json_object" || req.ResponseFormat.Type == "json_schema"),
 	}

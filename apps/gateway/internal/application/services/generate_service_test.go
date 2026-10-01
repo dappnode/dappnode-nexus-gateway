@@ -239,6 +239,9 @@ func TestProxy_UsesConfiguredFallbackOnce(t *testing.T) {
 	if meter.lastSuccessModel.ProviderConfig.ProviderName != "fallback" {
 		t.Fatalf("metered provider = %q, want fallback", meter.lastSuccessModel.ProviderConfig.ProviderName)
 	}
+	if meter.lastSuccessModel.ServiceTier == nil || *meter.lastSuccessModel.ServiceTier != "flex" {
+		t.Fatalf("metered service tier = %v, want flex", meter.lastSuccessModel.ServiceTier)
+	}
 }
 
 func TestProxy_ReturnsFallbackFailure(t *testing.T) {
@@ -299,6 +302,7 @@ func newDirectModelGenerateService(meter *stubUsageMeter, provider *stubProvider
 }
 
 func newFallbackGenerateService(meter *stubUsageMeter, primary, fallback *stubProvider) *GenerateService {
+	serviceTier := "flex"
 	return NewGenerateService(
 		&stubAuthService{authCtx: domain.AuthContext{
 			Account: domain.Account{ID: "acc1", Status: domain.AccountStatusActive},
@@ -309,7 +313,7 @@ func newFallbackGenerateService(meter *stubUsageMeter, primary, fallback *stubPr
 			ProviderModelID:               "primary-model",
 			UpstreamModelName:             "primary-upstream",
 			ProviderConfig:                domain.ProviderConfig{ProviderName: "primary"},
-			Fallback:                      &domain.ProviderTarget{ProviderModelID: "fallback-model", UpstreamModelName: "fallback-upstream", ProviderConfig: domain.ProviderConfig{ProviderName: "fallback"}},
+			Fallback:                      &domain.ProviderTarget{ProviderModelID: "fallback-model", UpstreamModelName: "fallback-upstream", ServiceTier: &serviceTier, ProviderConfig: domain.ProviderConfig{ProviderName: "fallback"}},
 			SupportsChatCompletions:       true,
 			SupportsChatCompletionsStream: true,
 			MaxContextWindow:              1000,
@@ -374,6 +378,33 @@ func TestProxy_RejectsWhenBalanceIsEmpty(t *testing.T) {
 	}
 	if usage.failureCalls != 0 {
 		t.Fatalf("failure calls = %d, want 0", usage.failureCalls)
+	}
+}
+
+func TestValidateRequest_RejectsCallerSelectedDoublewordServiceTier(t *testing.T) {
+	svc := &GenerateService{}
+	serviceTier := "flex"
+	model := domain.PublicModel{
+		PublicModelID:           "doubleword/test-realtime",
+		SupportsChatCompletions: true,
+		ProviderConfig:          domain.ProviderConfig{ProviderName: "doubleword"},
+	}
+	err := svc.validateRequest(domain.EndpointChatCompletions, domain.GenerateRequest{
+		ServiceTier: &serviceTier,
+	}, model)
+	if err == nil {
+		t.Fatal("expected caller-selected Doubleword service tier to be rejected")
+	}
+	gwErr, ok := err.(*domain.GatewayError)
+	if !ok || gwErr.Code != domain.ErrCodeInvalidField {
+		t.Fatalf("error = %#v, want invalid_field", err)
+	}
+
+	model.ProviderConfig.ProviderName = "openai"
+	if err := svc.validateRequest(domain.EndpointChatCompletions, domain.GenerateRequest{
+		ServiceTier: &serviceTier,
+	}, model); err != nil {
+		t.Fatalf("non-Doubleword service tier rejected: %v", err)
 	}
 }
 

@@ -249,8 +249,10 @@ func TestRuntimeClientRejectsInvalidModelSuccess(t *testing.T) {
 
 func TestRuntimeClientMapsProviderFallback(t *testing.T) {
 	response := validRuntimePublicModel("openai/gpt-test")
+	response.ServiceTier = stringPointer("priority")
 	response.Fallback = &runtimeProviderTarget{
 		ProviderModelID: "fallback-model", UpstreamModelName: "fallback-upstream",
+		ServiceTier: stringPointer("flex"),
 		ProviderConfig: runtimeProviderConfig{
 			ID: "fallback-config", ProviderName: "fallback", BaseURL: "https://fallback.test",
 			APIKeySecretRef: "FALLBACK_API_KEY", Active: true,
@@ -266,6 +268,10 @@ func TestRuntimeClientMapsProviderFallback(t *testing.T) {
 	if model.Fallback == nil || model.Fallback.ProviderModelID != "fallback-model" ||
 		model.Fallback.ProviderConfig.ProviderName != "fallback" {
 		t.Fatalf("fallback = %#v", model.Fallback)
+	}
+	if model.ServiceTier == nil || *model.ServiceTier != "priority" ||
+		model.Fallback.ServiceTier == nil || *model.Fallback.ServiceTier != "flex" {
+		t.Fatalf("service tiers = primary %v, fallback %v", model.ServiceTier, model.Fallback.ServiceTier)
 	}
 }
 
@@ -563,6 +569,10 @@ func rawResponseServer(body string) *httptest.Server {
 }
 
 func boolPointer(value bool) *bool {
+	return &value
+}
+
+func stringPointer(value string) *string {
 	return &value
 }
 

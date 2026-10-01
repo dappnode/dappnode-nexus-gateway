@@ -21,6 +21,7 @@ type ProviderConfig struct {
 type ProviderTarget struct {
 	ProviderModelID   string
 	UpstreamModelName string
+	ServiceTier       *string
 	ProviderConfig    ProviderConfig
 }
 
@@ -32,6 +33,7 @@ type PublicModel struct {
 	Description                   *string
 	ProviderModelID               string
 	UpstreamModelName             string
+	ServiceTier                   *string
 	ProviderConfig                ProviderConfig
 	Fallback                      *ProviderTarget
 	SupportsChatCompletions       bool
