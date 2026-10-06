@@ -21,6 +21,7 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/openai"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/registry"
 	tinfoilprovider "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/tinfoil"
+	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/typesafe"
 	routerclient "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/router"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/services"
@@ -70,6 +71,7 @@ func main() {
 	providerRegistry.Register("tinfoil", tinfoilprovider.NewAdapter(providerTimeout, zapLogger))
 	// Every other provider speaks the OpenAI wire format, so new ones (e.g.
 	// novita, mistral) are added in the database only.
+	providerRegistry.Register("typesafe", typesafe.NewAdapter(providerTimeout))
 	providerRegistry.SetDefault(openai.NewAdapter(providerTimeout, zapLogger))
 
 	meteringClient := meteringadapter.NewClient(meteringURL, meteringToken, 5*time.Second)
@@ -127,7 +129,7 @@ func main() {
 		}
 	}
 
-	router := gwhttp.NewRouter(healthHandler, modelsHandler, chatHandler, confidentialChatHandler, tinfoilHandler, attestationHandler, zapLogger)
+	router := gwhttp.NewRouter(healthHandler, modelsHandler, chatHandler, handlers.NewSystemOneHandler(generateSvc, zapLogger), confidentialChatHandler, tinfoilHandler, attestationHandler, zapLogger)
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", metrics.Handler())

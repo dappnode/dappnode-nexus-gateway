@@ -33,6 +33,7 @@ type ProviderEgressRoute struct {
 // production provider set. Keep this list in sync with the parent proxy units.
 func ProviderEgressRoutes() []ProviderEgressRoute {
 	return []ProviderEgressRoute{
+		{Name: "typesafe", Host: "api.typesafe.ai", Port: 443, VsockPort: 8452},
 		{Name: "deepseek", Host: "api.deepseek.com", Port: 443, VsockPort: 8443},
 		{Name: "novita", Host: "api.novita.ai", Port: 443, VsockPort: 8446},
 		{Name: "tinfoil-inference", Host: "inference.tinfoil.sh", Port: 443, VsockPort: 8447},

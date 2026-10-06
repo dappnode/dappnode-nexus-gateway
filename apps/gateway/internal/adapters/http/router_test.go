@@ -22,6 +22,7 @@ func TestNewRouter_PreservesLegacyChatRouteWithoutConfidentialHandler(t *testing
 		handlers.NewHealthHandler(),
 		handlers.NewModelsHandler(nil),
 		handlers.NewChatCompletionsHandler(nil, logger),
+		handlers.NewSystemOneHandler(nil, logger),
 		nil,
 		nil,
 		nil,
@@ -33,6 +34,12 @@ func TestNewRouter_PreservesLegacyChatRouteWithoutConfidentialHandler(t *testing
 	router.ServeHTTP(legacyResponse, legacyRequest)
 	if legacyResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("legacy status = %d, want existing 401 auth behavior", legacyResponse.Code)
+	}
+
+	evaluationResponse := httptest.NewRecorder()
+	router.ServeHTTP(evaluationResponse, httptest.NewRequest(http.MethodPost, "/v1/systemone", strings.NewReader(`{}`)))
+	if evaluationResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("systemone status = %d", evaluationResponse.Code)
 	}
 
 	confidentialRequest := httptest.NewRequest(http.MethodPost, "/v1/confidential/chat/completions", strings.NewReader(`{"model":"test"}`))

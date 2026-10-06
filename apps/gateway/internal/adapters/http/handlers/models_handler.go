@@ -95,6 +95,9 @@ func toRouterData(r domain.RouterEntry) dto.ModelData {
 }
 
 func modelFeatures(m domain.PublicModel) []string {
+	if m.SupportsEndpoint(domain.EndpointSystemOne) {
+		return []string{"structured-outputs"}
+	}
 	features := make([]string, 0, 5)
 	if m.SupportsChatCompletionsStream {
 		features = append(features, "streaming")
@@ -120,6 +123,9 @@ func modelFeatures(m domain.PublicModel) []string {
 
 func modelEndpoints(m domain.PublicModel) []string {
 	endpoints := make([]string, 0, 1)
+	if m.SupportsEndpoint(domain.EndpointSystemOne) {
+		return []string{"systemone"}
+	}
 	if m.SupportsChatCompletions {
 		endpoints = append(endpoints, "chat/completions")
 	}

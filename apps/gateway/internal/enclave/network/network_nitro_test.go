@@ -46,6 +46,7 @@ func TestProviderVsockPortUsesMeasuredAllowlist(t *testing.T) {
 		{address: "tuf-repo-cdn.sigstore.dev:443", want: 8449},
 		{address: "kds-proxy.tinfoil.sh:443", want: 8450},
 		{address: "tdx-proxy.tinfoil.sh:443", want: 8451},
+		{address: "api.typesafe.ai:443", want: 8452},
 		{address: "API.DEEPSEEK.COM.:443", want: 8443},
 		{address: "api.deepseek.com:80", wantErr: "not measured or allowed"},
 		{address: "example.com:443", wantErr: "not measured or allowed"},

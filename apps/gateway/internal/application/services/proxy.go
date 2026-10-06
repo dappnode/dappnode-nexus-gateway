@@ -32,7 +32,7 @@ type ProxyCall struct {
 	Body []byte
 }
 
-// Proxy runs a chat-completions request. The gateway authenticates, routes,
+// Proxy runs an inference request. The gateway authenticates, routes,
 // validates, masks PII for keys that ask for it, reserves credit, and meters
 // the usage it reads from the response; it never rebuilds the request or the
 // response.
@@ -45,7 +45,13 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
 		return nil, err
 	}
-	model, execReq, err := s.resolveModel(ctx, req)
+	var model domain.PublicModel
+	execReq := req
+	if endpoint == domain.EndpointSystemOne {
+		model, err = s.catalog.GetPublicModel(ctx, req.PublicModelID)
+	} else {
+		model, execReq, err = s.resolveModel(ctx, req)
+	}
 	if err != nil {
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
 		return nil, err
@@ -55,7 +61,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
 		return nil, err
 	}
-	masked, mapping, err := s.maskBody(ctx, raw, authCtx.APIKey.PIIMode)
+	masked, mapping, err := s.maskBody(ctx, raw, authCtx.APIKey.PIIMode, endpoint)
 	if err != nil {
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
@@ -76,6 +82,9 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 	}
 
 	attempt := func(target domain.PublicModel) (*ProxyCall, error) {
+		if err := s.validateRequest(endpoint, execReq, target); err != nil {
+			return nil, err
+		}
 		provider, err := s.registry.GetProvider(target.ProviderConfig.ProviderName)
 		if err != nil {
 			return nil, domain.ErrProviderUnavailable(target.ProviderConfig.ProviderName)
@@ -87,7 +96,13 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 			if err != nil {
 				return nil, err
 			}
-			rewritten, o, err := observeJSON(body, target.PublicModelID, unmask(target))
+			var rewritten []byte
+			var o outcome
+			if endpoint == domain.EndpointSystemOne {
+				rewritten, o, err = observeSystemOne(body, target.PublicModelID, unmask(target))
+			} else {
+				rewritten, o, err = observeJSON(body, target.PublicModelID, unmask(target))
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -116,7 +131,8 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 
 	call, err := attempt(model)
 	executed := model
-	if err != nil && shouldTryFallback(ctx, err, model.Fallback) {
+	if err != nil && shouldTryFallback(ctx, err, model.Fallback) &&
+		withProviderTarget(model, *model.Fallback).SupportsEndpoint(endpoint) {
 		executed = withProviderTarget(model, *model.Fallback)
 		s.logFallback(requestID, model, executed, sanitizeErrorWithPIIMapping(err, mapping))
 		call, err = attempt(executed)
