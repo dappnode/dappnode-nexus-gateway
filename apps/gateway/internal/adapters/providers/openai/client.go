@@ -45,6 +45,11 @@ func NewClient(timeout time.Duration) *Client {
 }
 
 func (c *Client) Do(ctx context.Context, baseURL, apiKey string, body map[string]any) ([]byte, error) {
+	return c.DoEndpoint(ctx, baseURL, "/chat/completions", apiKey, body)
+}
+
+// DoEndpoint uses the same bounded, enclave-aware transport for JSON APIs.
+func (c *Client) DoEndpoint(ctx context.Context, baseURL, endpoint, apiKey string, body map[string]any) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.responseTimeout)
 	defer cancel()
 
@@ -53,7 +58,7 @@ func (c *Client) Do(ctx context.Context, baseURL, apiKey string, body map[string
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+endpoint, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

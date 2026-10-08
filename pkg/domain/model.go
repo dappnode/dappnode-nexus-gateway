@@ -66,6 +66,11 @@ func ProofModeEnabled(mode string) bool {
 
 // SupportsEndpoint checks if the model supports the given endpoint.
 func (m PublicModel) SupportsEndpoint(endpoint string) bool {
+	// ponytail: the provider selects the wire protocol; add capability storage
+	// when one provider needs to serve multiple protocols.
+	if m.ProviderConfig.ProviderName == "typesafe" {
+		return endpoint == EndpointSystemOne
+	}
 	switch endpoint {
 	case EndpointChatCompletions:
 		return m.SupportsChatCompletions
@@ -76,6 +81,9 @@ func (m PublicModel) SupportsEndpoint(endpoint string) bool {
 
 // SupportsStreamForEndpoint checks if the model supports streaming for the given endpoint.
 func (m PublicModel) SupportsStreamForEndpoint(endpoint string) bool {
+	if m.ProviderConfig.ProviderName == "typesafe" {
+		return false
+	}
 	switch endpoint {
 	case EndpointChatCompletions:
 		return m.SupportsChatCompletionsStream

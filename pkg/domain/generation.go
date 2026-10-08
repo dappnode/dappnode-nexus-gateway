@@ -3,6 +3,7 @@ package domain
 // Endpoint constants.
 const (
 	EndpointChatCompletions = "chat_completions"
+	EndpointSystemOne       = "systemone"
 )
 
 // GenerateRequest is what the gateway reads from a client's request: enough

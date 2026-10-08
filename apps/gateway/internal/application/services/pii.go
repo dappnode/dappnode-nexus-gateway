@@ -25,7 +25,7 @@ import (
 // other static fields are not scanned. It returns the body unchanged and no
 // mapping when the key doesn't mask, the filter is off, or nothing was found.
 // On filter failure it fails closed, unless configured to fail open.
-func (s *GenerateService) maskBody(ctx context.Context, raw []byte, piiMode string) ([]byte, *domain.PIIMapping, error) {
+func (s *GenerateService) maskBody(ctx context.Context, raw []byte, piiMode, endpoint string) ([]byte, *domain.PIIMapping, error) {
 	mode, ok := domain.NormalizeAPIKeyPIIMode(piiMode)
 	if !ok || mode == domain.APIKeyPIIModeOff || s.pii == nil || !s.pii.Enabled() {
 		return raw, nil, nil
@@ -43,7 +43,7 @@ func (s *GenerateService) maskBody(ctx context.Context, raw []byte, piiMode stri
 		entityCounts:  make(map[string]int),
 		surfaceCounts: make(map[string]int),
 	}
-	if err := masker.maskBody(body); err != nil {
+	if err := masker.maskBody(body, endpoint); err != nil {
 		s.logger.Warn("pii filter error", "error", err, "fail_open", s.piiFailOpen)
 		if s.piiFailOpen {
 			return raw, nil, nil
@@ -66,7 +66,30 @@ func (s *GenerateService) maskBody(ctx context.Context, raw []byte, piiMode stri
 	return masked, masker.mapping, nil
 }
 
-func (m *requestPIIMasker) maskBody(body map[string]any) error {
+func (m *requestPIIMasker) maskBody(body map[string]any, endpoint string) error {
+	if endpoint == domain.EndpointSystemOne {
+		masked, _, err := m.maskAnyWithChanged("state", body["state"])
+		if err != nil {
+			return err
+		}
+		body["state"] = masked
+		questions, _ := body["questions"].(map[string]any)
+		for _, item := range questions {
+			question, _ := item.(map[string]any)
+			for _, field := range []string{"instructions", "criteria"} {
+				value, exists := question[field]
+				if !exists {
+					continue
+				}
+				masked, _, err := m.maskAnyWithChanged(field, value)
+				if err != nil {
+					return err
+				}
+				question[field] = masked
+			}
+		}
+		return nil
+	}
 	if user, ok := body["user"].(string); ok {
 		masked, err := m.maskText("user", user)
 		if err != nil {
@@ -345,6 +368,18 @@ func (u *unmasker) body(data []byte) []byte {
 	obj, err := decodeObject(data)
 	if err != nil {
 		return data
+	}
+	if answers, ok := obj["answers"].(map[string]any); ok {
+		for _, item := range answers {
+			answer, _ := item.(map[string]any)
+			legend, _ := answer["legend"].(map[string]any)
+			for key, value := range legend {
+				if text, ok := value.(string); ok {
+					legend[key] = domain.Unmask(text, u.mapping)
+					u.track("legend", legend[key].(string))
+				}
+			}
+		}
 	}
 	choices, _ := obj["choices"].([]any)
 	for _, item := range choices {

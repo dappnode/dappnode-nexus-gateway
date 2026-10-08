@@ -13,6 +13,7 @@ func NewRouter(
 	health *handlers.HealthHandler,
 	models *handlers.ModelsHandler,
 	chatCompletions *handlers.ChatCompletionsHandler,
+	systemOne *handlers.SystemOneHandler,
 	confidentialChat *handlers.ConfidentialChatCompletionsHandler,
 	tinfoil *handlers.TinfoilHandler,
 	attestation *handlers.AttestationHandler,
@@ -23,6 +24,9 @@ func NewRouter(
 	mux.HandleFunc("GET /healthz", health.Handle)
 	mux.HandleFunc("GET /v1/models", models.Handle)
 	mux.HandleFunc("POST /v1/chat/completions", chatCompletions.Handle)
+	if systemOne != nil {
+		mux.HandleFunc("POST /v1/systemone", systemOne.Handle)
+	}
 	if confidentialChat != nil {
 		mux.HandleFunc("POST /v1/confidential/chat/completions", confidentialChat.Handle)
 	}
