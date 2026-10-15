@@ -15,22 +15,26 @@ const (
 
 // Error codes as defined in the spec.
 const (
-	ErrCodeInvalidAPIKey         = "invalid_api_key"
-	ErrCodeInactiveAPIKey        = "inactive_api_key"
-	ErrCodeInactiveAccount       = "inactive_account"
-	ErrCodeUnsupportedModel      = "unsupported_model"
-	ErrCodeUnsupportedEndpoint   = "unsupported_endpoint"
-	ErrCodeUnsupportedFeature    = "unsupported_feature"
-	ErrCodeContextLengthExceeded = "context_length_exceeded"
-	ErrCodeProviderUnavailable   = "provider_unavailable"
-	ErrCodeProviderTimeout       = "provider_timeout"
-	ErrCodeToolSchemaInvalid     = "tool_schema_invalid"
-	ErrCodeToolMessageInvalid    = "tool_message_invalid"
-	ErrCodeInvalidField          = "invalid_field"
-	ErrCodeUnknownField          = "unknown_field"
-	ErrCodeInsufficientBalance   = "insufficient_balance"
-	ErrCodeClientCanceled        = "client_canceled"
-	ErrCodeInternalError         = "internal_error"
+	ErrCodeInvalidAPIKey           = "invalid_api_key"
+	ErrCodeInactiveAPIKey          = "inactive_api_key"
+	ErrCodeInactiveAccount         = "inactive_account"
+	ErrCodeUnsupportedModel        = "unsupported_model"
+	ErrCodeUnsupportedEndpoint     = "unsupported_endpoint"
+	ErrCodeUnsupportedFeature      = "unsupported_feature"
+	ErrCodeContextLengthExceeded   = "context_length_exceeded"
+	ErrCodeProviderUnavailable     = "provider_unavailable"
+	ErrCodeProviderRejectedRequest = "provider_rejected_request"
+	ErrCodeProviderConfiguration   = "provider_configuration_error"
+	ErrCodeProviderRateLimited     = "provider_rate_limited"
+	ErrCodeProviderError           = "provider_error"
+	ErrCodeProviderTimeout         = "provider_timeout"
+	ErrCodeToolSchemaInvalid       = "tool_schema_invalid"
+	ErrCodeToolMessageInvalid      = "tool_message_invalid"
+	ErrCodeInvalidField            = "invalid_field"
+	ErrCodeUnknownField            = "unknown_field"
+	ErrCodeInsufficientBalance     = "insufficient_balance"
+	ErrCodeClientCanceled          = "client_canceled"
+	ErrCodeInternalError           = "internal_error"
 )
 
 // GatewayError is the canonical error type for the gateway.
@@ -39,6 +43,7 @@ type GatewayError struct {
 	Type       string
 	Code       string
 	Message    string
+	RetryAfter string // Validated provider retry guidance, forwarded as a header.
 	// Metadata carries structured diagnostic fields for logging (never serialized to clients).
 	Metadata map[string]any
 }
@@ -122,7 +127,7 @@ func ErrInternal(msg string) *GatewayError {
 }
 
 func ErrProviderError(status int, msg string) *GatewayError {
-	return &GatewayError{HTTPStatus: status, Type: ErrTypeProvider, Code: ErrCodeProviderUnavailable, Message: msg}
+	return &GatewayError{HTTPStatus: status, Type: ErrTypeProvider, Code: ErrCodeProviderError, Message: msg}
 }
 
 // Control-plane error codes.
