@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
 	"github.com/google/uuid"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
@@ -105,6 +106,49 @@ func TestConfidentialChatCompletionsHandler_StreamsEncryptedResponse(t *testing.
 	}
 	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+}
+
+func TestConfidentialStreamRefreshesNetworkWriteDeadline(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i := 0; i < 6; i++ {
+			_, _ = io.WriteString(w, "data: token\n\n")
+			w.(http.Flusher).Flush()
+			time.Sleep(30 * time.Millisecond)
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		w.(http.Flusher).Flush()
+	})
+	handler, clientIdentity := newConfidentialTestHandler(t, next)
+	server := httptest.NewUnstartedServer(middleware.WriteTimeout(time.Second)(http.HandlerFunc(handler.Handle)))
+	server.Config.WriteTimeout = 50 * time.Millisecond
+	server.Start()
+	defer server.Close()
+	request, requestContext, _ := newEncryptedConfidentialRequest(t, clientIdentity, envelopeAt(
+		time.Now(), uuid.NewString(), json.RawMessage(`{"model":"test","stream":true,"messages":[]}`),
+	))
+	request.URL.Scheme, request.URL.Host = "http", server.Listener.Addr().String()
+	request.RequestURI = ""
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	ciphertext, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("encrypted stream ended early: %v", err)
+	}
+	if bytes.Contains(ciphertext, []byte("data: token")) {
+		t.Fatal("encrypted stream exposed plaintext")
+	}
+	recorder := httptest.NewRecorder()
+	recorder.HeaderMap = response.Header.Clone()
+	recorder.Code = response.StatusCode
+	_, _ = recorder.Body.Write(ciphertext)
+	plaintext := decryptConfidentialResponse(t, recorder, requestContext)
+	if got, want := string(plaintext), strings.Repeat("data: token\n\n", 6)+"data: [DONE]\n\n"; got != want {
+		t.Fatalf("stream = %q, want %q", got, want)
 	}
 }
 

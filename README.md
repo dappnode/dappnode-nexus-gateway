@@ -88,6 +88,13 @@ keep a valid `Retry-After` header. Errors include `origin` (`gateway` or
 details are not exposed. A configured fallback provider is tried only after a
 rate limit or a server-side failure, never after a rejected request.
 
+Responses have no limit on total duration. Two stall guards apply instead:
+`PROVIDER_SILENCE_TIMEOUT_SECONDS` (default 900) ends a request when the
+provider sends nothing, neither headers nor bytes, for that long, and
+`CLIENT_IO_TIMEOUT_SECONDS` (default 60) ends one when a single read from or
+write to the client is blocked for that long. Both must be positive whole
+seconds.
+
 ## Privacy and usage controls
 
 Nexus provides per-key PII masking settings and access to privacy-focused

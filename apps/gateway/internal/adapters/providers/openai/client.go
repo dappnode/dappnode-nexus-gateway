@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	providerstream "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/stream"
 	enclavenetwork "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/network"
 )
 
@@ -51,9 +52,6 @@ func (c *Client) Do(ctx context.Context, baseURL, apiKey string, body map[string
 
 // DoEndpoint uses the same bounded, enclave-aware transport for JSON APIs.
 func (c *Client) DoEndpoint(ctx context.Context, baseURL, endpoint, apiKey string, body map[string]any) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.responseTimeout)
-	defer cancel()
-
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -70,6 +68,7 @@ func (c *Client) DoEndpoint(ctx context.Context, baseURL, endpoint, apiKey strin
 	if err != nil {
 		return nil, fmt.Errorf("provider request failed: %w", err)
 	}
+	resp.Body = providerstream.WithIdleTimeout(resp.Body, c.responseTimeout)
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
@@ -108,6 +107,7 @@ func (c *Client) DoStream(ctx context.Context, baseURL, apiKey string, body map[
 		return nil, ParseProviderResponseError(resp, body)
 	}
 
+	resp.Body = providerstream.WithIdleTimeout(resp.Body, c.responseTimeout)
 	return resp, nil
 }
 

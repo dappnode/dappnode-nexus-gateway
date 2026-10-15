@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/openai"
+	providerstream "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/stream"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 	tinfoilsdk "github.com/tinfoilsh/tinfoil-go"
@@ -80,20 +81,15 @@ func (a *Adapter) newVerifiedClient(ctx context.Context, model domain.PublicMode
 }
 
 func (a *Adapter) do(ctx context.Context, verified VerifiedClient, apiKey string, body map[string]any) ([]byte, error) {
-	if a.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, a.timeout)
-		defer cancel()
-	}
-
 	req, err := newProviderRequest(ctx, verified, apiKey, body)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := verified.HTTPClient().Do(req)
+	resp, err := providerstream.DoWithHeaderTimeout(verified.HTTPClient(), req, a.timeout)
 	if err != nil {
 		return nil, fmt.Errorf("tinfoil request failed: %w", err)
 	}
+	resp.Body = providerstream.WithIdleTimeout(resp.Body, a.timeout)
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
@@ -111,7 +107,7 @@ func (a *Adapter) doStream(ctx context.Context, verified VerifiedClient, apiKey 
 	if err != nil {
 		return nil, err
 	}
-	resp, err := verified.HTTPClient().Do(req)
+	resp, err := providerstream.DoWithHeaderTimeout(verified.HTTPClient(), req, a.timeout)
 	if err != nil {
 		return nil, fmt.Errorf("tinfoil stream request failed: %w", err)
 	}
@@ -120,6 +116,7 @@ func (a *Adapter) doStream(ctx context.Context, verified VerifiedClient, apiKey 
 		resp.Body.Close()
 		return nil, openai.ParseProviderResponseError(resp, respBody)
 	}
+	resp.Body = providerstream.WithIdleTimeout(resp.Body, a.timeout)
 	return resp, nil
 }
 
