@@ -15,6 +15,7 @@ import (
 	nsmattestation "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/attestation/nsm"
 	gwhttp "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/handlers"
+	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
 	meteringadapter "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/metering"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/pii/presidio"
@@ -56,7 +57,11 @@ func main() {
 	routerURL := envOr("ROUTER_URL", "http://localhost:8083")
 	meteringURL := envOr("METERING_URL", "http://localhost:8084")
 	meteringToken := envOr("METERING_TOKEN", "dev-metering-token")
-	providerTimeout := 300 * time.Second
+	transportTimeouts, err := loadTransportTimeouts()
+	if err != nil {
+		log.Fatal(err)
+	}
+	providerTimeout := transportTimeouts.ProviderSilence
 
 	zapLogger, err := logger.NewZapLogger(logLevel)
 	if err != nil {
@@ -130,16 +135,18 @@ func main() {
 	}
 
 	router := gwhttp.NewRouter(healthHandler, modelsHandler, chatHandler, handlers.NewSystemOneHandler(generateSvc, zapLogger), confidentialChatHandler, tinfoilHandler, attestationHandler, zapLogger)
+	router = middleware.ReadTimeout(transportTimeouts.ClientIO)(middleware.WriteTimeout(transportTimeouts.ClientIO)(router))
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", metrics.Handler())
 
 	srv := &http.Server{
-		Addr:         ":" + port,
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              ":" + port,
+		Handler:           router,
+		ReadHeaderTimeout: 30 * time.Second,
+		// Reads and writes are bounded one at a time by middleware. An absolute
+		// deadline would cut off healthy streams and long answers.
+		IdleTimeout: 120 * time.Second,
 	}
 
 	go func() {
