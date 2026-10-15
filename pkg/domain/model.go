@@ -78,16 +78,3 @@ func (m PublicModel) SupportsEndpoint(endpoint string) bool {
 		return false
 	}
 }
-
-// SupportsStreamForEndpoint checks if the model supports streaming for the given endpoint.
-func (m PublicModel) SupportsStreamForEndpoint(endpoint string) bool {
-	if m.ProviderConfig.ProviderName == "typesafe" {
-		return false
-	}
-	switch endpoint {
-	case EndpointChatCompletions:
-		return m.SupportsChatCompletionsStream
-	default:
-		return false
-	}
-}

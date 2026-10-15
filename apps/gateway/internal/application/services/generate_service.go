@@ -187,20 +187,12 @@ func (s *GenerateService) validateRequest(endpoint string, req domain.GenerateRe
 		return domain.ErrUnsupportedEndpoint(model.PublicModelID, endpoint)
 	}
 
-	if req.Stream && !model.SupportsStreamForEndpoint(endpoint) {
+	// Catalog capability flags describe the catalog; they are not a request
+	// schema. Chat options go to the provider unchanged and the provider
+	// decides, so a stale flag cannot reject a request the provider accepts.
+	// SystemOne has no streaming wire protocol in Nexus.
+	if endpoint == domain.EndpointSystemOne && req.Stream {
 		return domain.ErrUnsupportedFeature("streaming for " + endpoint)
-	}
-
-	if len(req.Tools) > 0 && !model.SupportsTools {
-		return domain.ErrUnsupportedFeature("tools")
-	}
-
-	if req.ParallelToolCalls != nil && *req.ParallelToolCalls && !model.SupportsParallelToolCalls {
-		return domain.ErrUnsupportedFeature("parallel_tool_calls")
-	}
-
-	if req.StructuredOutput && !model.SupportsStructuredOutput {
-		return domain.ErrUnsupportedFeature("structured_output")
 	}
 
 	if strings.EqualFold(model.ProviderConfig.ProviderName, "doubleword") && req.ServiceTier != nil {

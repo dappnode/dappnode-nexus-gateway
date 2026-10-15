@@ -77,16 +77,3 @@ func TestPublicModelSupportsEndpoint(t *testing.T) {
 		t.Error("should not support unknown")
 	}
 }
-
-func TestPublicModelSupportsStreamForEndpoint(t *testing.T) {
-	m := domain.PublicModel{
-		SupportsChatCompletionsStream: true,
-	}
-	if !m.SupportsStreamForEndpoint(domain.EndpointChatCompletions) {
-		t.Error("should support chat_completions stream")
-	}
-	m.SupportsChatCompletionsStream = false
-	if m.SupportsStreamForEndpoint(domain.EndpointChatCompletions) {
-		t.Error("should not support chat_completions stream when disabled")
-	}
-}

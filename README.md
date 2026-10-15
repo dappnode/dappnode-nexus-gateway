@@ -73,7 +73,10 @@ print(response.choices[0].message.content)
 Supported capabilities depend on the selected model and can include streaming,
 tool calls, parallel tool calls, structured outputs and reasoning. The current
 capabilities for each model are shown in the
-[model catalog](https://nexus.dappnode.com/models).
+[model catalog](https://nexus.dappnode.com/models). They describe each model
+and are not checked against chat requests: the selected provider validates chat
+options, so a stale catalog flag cannot reject a request the provider would
+accept. Endpoint routing, privacy policy and credit checks still apply.
 
 ## Privacy and usage controls
 
