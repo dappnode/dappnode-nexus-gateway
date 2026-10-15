@@ -101,7 +101,7 @@ func (a *Adapter) do(ctx context.Context, verified VerifiedClient, apiKey string
 		return nil, fmt.Errorf("failed to read Tinfoil response: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, openai.ParseProviderError(resp.StatusCode, respBody)
+		return nil, openai.ParseProviderResponseError(resp, respBody)
 	}
 	return respBody, nil
 }
@@ -118,7 +118,7 @@ func (a *Adapter) doStream(ctx context.Context, verified VerifiedClient, apiKey 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 		resp.Body.Close()
-		return nil, openai.ParseProviderError(resp.StatusCode, respBody)
+		return nil, openai.ParseProviderResponseError(resp, respBody)
 	}
 	return resp, nil
 }

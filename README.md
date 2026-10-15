@@ -75,6 +75,16 @@ tool calls, parallel tool calls, structured outputs and reasoning. The current
 capabilities for each model are shown in the
 [model catalog](https://nexus.dappnode.com/models).
 
+Provider errors keep their meaning. A request the provider rejects keeps its
+HTTP status (for example 400 or 422) with `provider_rejected_request`. A
+provider credential, billing or permission failure becomes 502
+`provider_configuration_error`, because it concerns Nexus's provider account,
+not the caller's key. Provider rate limits become `provider_rate_limited` and
+keep a valid `Retry-After` header. Errors include `origin` (`gateway` or
+`upstream`) and, when known, the numeric `upstream_status`; other diagnostic
+details are not exposed. A configured fallback provider is tried only after a
+rate limit or a server-side failure, never after a rejected request.
+
 ## Privacy and usage controls
 
 Nexus provides per-key PII masking settings and access to privacy-focused

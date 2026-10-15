@@ -26,12 +26,11 @@ func WriteError(w http.ResponseWriter, err error) {
 	if !ok {
 		gwErr = domain.ErrInternal("an internal error occurred")
 	}
+	if gwErr.RetryAfter != "" {
+		w.Header().Set("Retry-After", gwErr.RetryAfter)
+	}
 	WriteJSON(w, gwErr.HTTPStatus, dto.ErrorResponse{
-		Error: dto.ErrorDetail{
-			Type:    gwErr.Type,
-			Code:    gwErr.Code,
-			Message: gwErr.Message,
-		},
+		Error: errorDetail(gwErr),
 	})
 }
 
@@ -69,13 +68,25 @@ func WriteErrorWithLog(w http.ResponseWriter, r *http.Request, logger ports.Logg
 		)
 	}
 
+	if gwErr.RetryAfter != "" {
+		w.Header().Set("Retry-After", gwErr.RetryAfter)
+	}
 	WriteJSON(w, gwErr.HTTPStatus, dto.ErrorResponse{
-		Error: dto.ErrorDetail{
-			Type:    gwErr.Type,
-			Code:    gwErr.Code,
-			Message: gwErr.Message,
-		},
+		Error: errorDetail(gwErr),
 	})
+}
+
+// Diagnostic extensions expose only classification and numeric status.
+// Arbitrary internal metadata is never serialized to clients.
+func errorDetail(err *domain.GatewayError) dto.ErrorDetail {
+	detail := dto.ErrorDetail{Type: err.Type, Code: err.Code, Message: err.Message, Origin: "gateway"}
+	if err.Type == domain.ErrTypeProvider {
+		detail.Origin = "upstream"
+	}
+	if status, ok := err.Metadata["upstream_status"].(int); ok {
+		detail.UpstreamStatus = status
+	}
+	return detail
 }
 
 // ExtractBearerToken extracts the bearer token from the Authorization header.

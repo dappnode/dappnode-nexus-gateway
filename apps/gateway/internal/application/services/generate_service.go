@@ -74,8 +74,13 @@ func shouldTryFallback(ctx context.Context, err error, fallback *domain.Provider
 	if err == nil || fallback == nil || ctx.Err() != nil {
 		return false
 	}
+	// A provider that rejected the request would reject it from the fallback
+	// too; only rate limits and server-side failures change provider.
 	var gatewayErr *domain.GatewayError
-	return !errors.As(err, &gatewayErr) || gatewayErr.Code != domain.ErrCodeClientCanceled
+	if !errors.As(err, &gatewayErr) {
+		return true
+	}
+	return gatewayErr.HTTPStatus == 429 || gatewayErr.HTTPStatus >= 500
 }
 
 func withProviderTarget(model domain.PublicModel, target domain.ProviderTarget) domain.PublicModel {

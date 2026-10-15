@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,7 +78,7 @@ func (c *Client) DoEndpoint(ctx context.Context, baseURL, endpoint, apiKey strin
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, parseProviderError(resp.StatusCode, respBody)
+		return nil, ParseProviderResponseError(resp, respBody)
 	}
 
 	return respBody, nil
@@ -104,7 +105,7 @@ func (c *Client) DoStream(ctx context.Context, baseURL, apiKey string, body map[
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 		resp.Body.Close()
-		return nil, parseProviderError(resp.StatusCode, body)
+		return nil, ParseProviderResponseError(resp, body)
 	}
 
 	return resp, nil
@@ -113,6 +114,7 @@ func (c *Client) DoStream(ctx context.Context, baseURL, apiKey string, body map[
 // ProviderHTTPError carries the upstream HTTP status code so the gateway can
 // propagate a meaningful status instead of always returning 502.
 type ProviderHTTPError struct {
+	RetryAfter string
 	StatusCode int
 	Body       string
 	RawBody    string
@@ -182,8 +184,19 @@ func parseProviderError(statusCode int, body []byte) error {
 	}
 }
 
-func ParseProviderError(statusCode int, body []byte) error {
-	return parseProviderError(statusCode, body)
+// ParseProviderResponseError also keeps a valid Retry-After value (seconds or
+// an HTTP date). Other provider headers are never forwarded.
+func ParseProviderResponseError(resp *http.Response, body []byte) error {
+	err := parseProviderError(resp.StatusCode, body).(*ProviderHTTPError)
+	value := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if len(value) <= 128 && !strings.ContainsAny(value, "\r\n") {
+		if _, parseErr := strconv.ParseUint(value, 10, 32); parseErr == nil {
+			err.RetryAfter = value
+		} else if _, parseErr := http.ParseTime(value); parseErr == nil {
+			err.RetryAfter = value
+		}
+	}
+	return err
 }
 
 func stringifyProviderCode(v any) string {

@@ -60,23 +60,29 @@ func mapProviderError(err error, providerName string) error {
 	if errors.As(err, &httpErr) {
 		var gwErr *domain.GatewayError
 		switch {
-		case httpErr.StatusCode == 401 || httpErr.StatusCode == 403:
+		case httpErr.StatusCode == 401 || httpErr.StatusCode == 402 || httpErr.StatusCode == 403:
 			// Auth / permission / billing failure at the upstream provider.
 			// Novita uses 403 for invalid API key, insufficient balance, and access denied.
 			gwErr = domain.ErrProviderError(502, fmt.Sprintf("provider auth/permission error: %s", httpErr.Body))
+			gwErr.Code = domain.ErrCodeProviderConfiguration
 		case httpErr.StatusCode == 429:
 			// Rate limit or token limit exceeded — surface to client so it can back off.
 			gwErr = domain.ErrProviderError(429, "provider rate limited: "+httpErr.Body)
+			gwErr.Code = domain.ErrCodeProviderRateLimited
 		case httpErr.StatusCode == 503:
 			// Service unavailable — surface as 503 so clients know to retry.
 			gwErr = domain.ErrProviderUnavailable(providerName)
+		case httpErr.StatusCode == 504:
+			gwErr = domain.ErrProviderTimeout(providerName)
 		case httpErr.StatusCode >= 500:
-			gwErr = domain.ErrProviderError(502, fmt.Sprintf("provider server error: %s", httpErr.Body))
+			gwErr = domain.ErrProviderError(httpErr.StatusCode, fmt.Sprintf("provider server error: %s", httpErr.Body))
 		default:
 			// Client errors from upstream (400, 404, 422, etc.) — the gateway
 			// forwarded a request the provider doesn't accept.
-			gwErr = domain.ErrProviderError(502, fmt.Sprintf("provider rejected request: %s", httpErr.Body))
+			gwErr = domain.ErrProviderError(httpErr.StatusCode, fmt.Sprintf("provider rejected request: %s", httpErr.Body))
+			gwErr.Code = domain.ErrCodeProviderRejectedRequest
 		}
+		gwErr.RetryAfter = httpErr.RetryAfter
 		return gwErr.WithMeta(
 			"upstream_status", httpErr.StatusCode,
 			"upstream_error", httpErr.Body,
@@ -209,7 +215,9 @@ func mapProviderErrorWithCompatibilityContext(err error, model domain.PublicMode
 	if model.ProviderConfig.ProviderName == "novita" && isInvalidRequestHTTPError(err) && hasNonDroppableToolChoice(body) {
 		var httpErr *ProviderHTTPError
 		if errors.As(err, &httpErr) {
-			return domain.ErrProviderError(502, "provider rejected request; Novita may not support the requested tool_choice semantics for this model: "+httpErr.Body).WithMeta(
+			mapped := mapProviderError(err, model.ProviderConfig.ProviderName).(*domain.GatewayError)
+			mapped.Message = "provider rejected request containing required or named tool_choice: " + httpErr.Body
+			return mapped.WithMeta(
 				"upstream_status", httpErr.StatusCode,
 				"upstream_error", httpErr.Body,
 				"upstream_type", httpErr.Type,

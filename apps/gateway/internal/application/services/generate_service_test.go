@@ -568,3 +568,17 @@ func TestProxy_ReturnsRouterErrorForExplicitRouterOutage(t *testing.T) {
 		t.Fatalf("router calls = %d, want 1", router.calls)
 	}
 }
+
+func TestRequestRejectionDoesNotChangeProvider(t *testing.T) {
+	fallback := &domain.ProviderTarget{}
+	for _, status := range []int{400, 404, 413, 422, 499} {
+		if shouldTryFallback(context.Background(), domain.ErrProviderError(status, "rejected"), fallback) {
+			t.Fatalf("fell back after %d", status)
+		}
+	}
+	for _, err := range []error{domain.ErrProviderUnavailable("fixture"), domain.ErrProviderError(429, "rate limited"), domain.ErrProviderError(500, "failed")} {
+		if !shouldTryFallback(context.Background(), err, fallback) {
+			t.Fatalf("%v did not permit configured fallback", err)
+		}
+	}
+}
