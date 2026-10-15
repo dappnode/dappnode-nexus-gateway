@@ -74,7 +74,6 @@ func toPublicModelData(m domain.PublicModel, eurToUSDRate float64) dto.ModelData
 		CacheReadPricePer1MTokensUSD:    pricePtrToUSDPtr(m.Currency, m.CacheReadPricePerMillion, eurToUSDRate),
 		CacheWritePricePer1MTokensUSD:   pricePtrToUSDPtr(m.Currency, m.CacheWritePricePerMillion, eurToUSDRate),
 		Capabilities:                    publishedCapabilities(m),
-		Features:                        modelFeatures(m),
 		Endpoints:                       modelEndpoints(m),
 		ProofMode:                       proofMode,
 		ProofsEnabled:                   domain.ProofModeEnabled(proofMode),
@@ -90,45 +89,9 @@ func toRouterData(r domain.RouterEntry) dto.ModelData {
 		Created:     r.CreatedAt.Unix(),
 		DisplayName: r.DisplayName,
 		Description: r.Description,
-		Features:    []string{"routing"},
 		Endpoints:   []string{"chat/completions"},
 		ProofMode:   domain.ProofModeNone,
 	}
-}
-
-func modelFeatures(m domain.PublicModel) []string {
-	if m.SupportsEndpoint(domain.EndpointSystemOne) {
-		return []string{"structured-outputs"}
-	}
-	// features is the older summary of capabilities, kept for existing clients.
-	var stated struct {
-		Streaming         bool `json:"streaming"`
-		ToolCall          bool `json:"tool_call"`
-		ParallelToolCalls bool `json:"parallel_tool_calls"`
-		StructuredOutput  bool `json:"structured_output"`
-		Reasoning         bool `json:"reasoning"`
-	}
-	_ = json.Unmarshal(m.Capabilities, &stated)
-	features := make([]string, 0, 6)
-	for _, f := range []struct {
-		on   bool
-		name string
-	}{
-		{stated.Streaming, "streaming"},
-		{stated.ToolCall, "function-calling"},
-		{stated.ParallelToolCalls, "parallel-tool-calls"},
-		{stated.StructuredOutput, "structured-outputs"},
-		{stated.Reasoning, "reasoning"},
-	} {
-		if f.on {
-			features = append(features, f.name)
-		}
-	}
-	switch m.EffectiveProofMode() {
-	case domain.ProofModeTinfoilAttestedTransport:
-		features = append(features, "tinfoil-attested-transport")
-	}
-	return features
 }
 
 // publishedCapabilities is the operator's record, unchanged, or nothing when

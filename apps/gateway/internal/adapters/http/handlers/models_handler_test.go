@@ -9,7 +9,7 @@ import (
 )
 
 // The operator's record is published unchanged, including fields this Gateway
-// does not know yet; features stays as its older summary.
+// does not know yet. There is no separate features list any more.
 func TestModelsHandler_PublishesCapabilitiesUnchanged(t *testing.T) {
 	stored := `{"modalities":{"input":["text","image"],"output":["text"]},"tool_call":true,"reasoning":true,` +
 		`"reasoning_options":[{"type":"effort","values":["low","high","max"],"default":"high"}],"audio_output":false}`
@@ -17,8 +17,8 @@ func TestModelsHandler_PublishesCapabilitiesUnchanged(t *testing.T) {
 	if string(data.Capabilities) != stored {
 		t.Fatalf("capabilities = %s", data.Capabilities)
 	}
-	if strings.Join(data.Features, ",") != "function-calling,reasoning" {
-		t.Fatalf("features = %v", data.Features)
+	if body, _ := json.Marshal(data); strings.Contains(string(body), `"features"`) {
+		t.Fatalf("published the removed features list: %s", body)
 	}
 	empty := toPublicModelData(domain.PublicModel{PublicModelID: "unknown", SupportsChatCompletions: true, Capabilities: json.RawMessage(`{}`)}, 1)
 	body, _ := json.Marshal(empty)

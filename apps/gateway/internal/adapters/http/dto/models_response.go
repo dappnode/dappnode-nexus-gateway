@@ -30,9 +30,8 @@ type ModelData struct {
 	CacheReadPricePer1MTokensUSD    *float64 `json:"cache_read_price_per_1m_tokens_usd,omitempty"`
 	CacheWritePricePer1MTokensUSD   *float64 `json:"cache_write_price_per_1m_tokens_usd,omitempty"`
 	// Capabilities is what the operator states the model accepts, using
-	// models.dev field names. Features is its older summary.
+	// models.dev field names. A missing field means not stated.
 	Capabilities  json.RawMessage `json:"capabilities,omitempty"`
-	Features      []string        `json:"features"`
 	Endpoints     []string        `json:"endpoints"`
 	ProofMode     string          `json:"proof_mode"`
 	ProofsEnabled bool            `json:"proofs_enabled"`

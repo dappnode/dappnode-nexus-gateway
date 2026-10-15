@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -152,20 +153,20 @@ func TestModelsHandler_ListsModels(t *testing.T) {
 	var body struct {
 		Object string `json:"object"`
 		Data   []struct {
-			ID                          string   `json:"id"`
-			Object                      string   `json:"object"`
-			OwnedBy                     string   `json:"owned_by"`
-			DisplayName                 string   `json:"display_name"`
-			Description                 *string  `json:"description,omitempty"`
-			ContextSize                 int      `json:"context_size"`
-			MaxOutputTokens             int      `json:"max_output_tokens"`
-			Currency                    string   `json:"currency"`
-			InputPricePer1MTokensCents  int64    `json:"input_price_per_1m_tokens_cents"`
-			OutputPricePer1MTokensCents int64    `json:"output_price_per_1m_tokens_cents"`
-			InputPricePer1MTokensUSD    float64  `json:"input_price_per_1m_tokens_usd"`
-			OutputPricePer1MTokensUSD   float64  `json:"output_price_per_1m_tokens_usd"`
-			Features                    []string `json:"features"`
-			Endpoints                   []string `json:"endpoints"`
+			ID                          string          `json:"id"`
+			Object                      string          `json:"object"`
+			OwnedBy                     string          `json:"owned_by"`
+			DisplayName                 string          `json:"display_name"`
+			Description                 *string         `json:"description,omitempty"`
+			ContextSize                 int             `json:"context_size"`
+			MaxOutputTokens             int             `json:"max_output_tokens"`
+			Currency                    string          `json:"currency"`
+			InputPricePer1MTokensCents  int64           `json:"input_price_per_1m_tokens_cents"`
+			OutputPricePer1MTokensCents int64           `json:"output_price_per_1m_tokens_cents"`
+			InputPricePer1MTokensUSD    float64         `json:"input_price_per_1m_tokens_usd"`
+			OutputPricePer1MTokensUSD   float64         `json:"output_price_per_1m_tokens_usd"`
+			Capabilities                map[string]bool `json:"capabilities"`
+			Endpoints                   []string        `json:"endpoints"`
 		} `json:"data"`
 	}
 	json.NewDecoder(resp.Body).Decode(&body)
@@ -210,18 +211,8 @@ func TestModelsHandler_ListsModels(t *testing.T) {
 	if first.OutputPricePer1MTokensUSD != 1.728 {
 		t.Errorf("data[0].output_price_usd = %v, want 1.728", first.OutputPricePer1MTokensUSD)
 	}
-	wantFeatures := map[string]bool{
-		"streaming":          true,
-		"function-calling":   true,
-		"structured-outputs": true,
-	}
-	if len(first.Features) != len(wantFeatures) {
-		t.Errorf("data[0].features = %v, want %v", first.Features, wantFeatures)
-	}
-	for _, f := range first.Features {
-		if !wantFeatures[f] {
-			t.Errorf("unexpected feature %q in data[0].features", f)
-		}
+	if want := map[string]bool{"streaming": true, "tool_call": true, "structured_output": true}; !reflect.DeepEqual(first.Capabilities, want) {
+		t.Errorf("data[0].capabilities = %v, want %v", first.Capabilities, want)
 	}
 	if len(first.Endpoints) != 1 || first.Endpoints[0] != "chat/completions" {
 		t.Errorf("data[0].endpoints = %v, want [chat/completions]", first.Endpoints)
