@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -309,15 +310,15 @@ func newFallbackGenerateService(meter *stubUsageMeter, primary, fallback *stubPr
 			APIKey:  domain.APIKey{ID: "key1", Active: true},
 		}},
 		&stubModelCatalog{model: domain.PublicModel{
-			PublicModelID:                 "model",
-			ProviderModelID:               "primary-model",
-			UpstreamModelName:             "primary-upstream",
-			ProviderConfig:                domain.ProviderConfig{ProviderName: "primary"},
-			Fallback:                      &domain.ProviderTarget{ProviderModelID: "fallback-model", UpstreamModelName: "fallback-upstream", ServiceTier: &serviceTier, ProviderConfig: domain.ProviderConfig{ProviderName: "fallback"}},
-			SupportsChatCompletions:       true,
-			SupportsChatCompletionsStream: true,
-			MaxContextWindow:              1000,
-			MaxOutputTokens:               100,
+			PublicModelID:           "model",
+			ProviderModelID:         "primary-model",
+			UpstreamModelName:       "primary-upstream",
+			ProviderConfig:          domain.ProviderConfig{ProviderName: "primary"},
+			Fallback:                &domain.ProviderTarget{ProviderModelID: "fallback-model", UpstreamModelName: "fallback-upstream", ServiceTier: &serviceTier, ProviderConfig: domain.ProviderConfig{ProviderName: "fallback"}},
+			SupportsChatCompletions: true,
+			Capabilities:            json.RawMessage(`{"streaming":true}`),
+			MaxContextWindow:        1000,
+			MaxOutputTokens:         100,
 		}},
 		nil,
 		&stubProviderRegistry{providers: map[string]ports.Provider{
@@ -456,16 +457,16 @@ func TestProxy_RoutesExplicitRouterToSelectedModel(t *testing.T) {
 		Reason:         reason,
 	}}
 	selected := domain.PublicModel{
-		PublicModelID:                 "minimax/minimax-m2.7",
-		DisplayName:                   "MiniMax M2.7",
-		ProviderModelID:               "novita-minimax-m2.7",
-		ProviderConfig:                domain.ProviderConfig{ProviderName: "novita"},
-		SupportsChatCompletions:       true,
-		SupportsChatCompletionsStream: true,
-		MaxContextWindow:              1000,
-		MaxOutputTokens:               100,
-		InputPricePerMillion:          decimal.NewFromFloat(0.03),
-		OutputPricePerMillion:         decimal.NewFromFloat(0.12),
+		PublicModelID:           "minimax/minimax-m2.7",
+		DisplayName:             "MiniMax M2.7",
+		ProviderModelID:         "novita-minimax-m2.7",
+		ProviderConfig:          domain.ProviderConfig{ProviderName: "novita"},
+		SupportsChatCompletions: true,
+		Capabilities:            json.RawMessage(`{"streaming":true}`),
+		MaxContextWindow:        1000,
+		MaxOutputTokens:         100,
+		InputPricePerMillion:    decimal.NewFromFloat(0.03),
+		OutputPricePerMillion:   decimal.NewFromFloat(0.12),
 	}
 	svc := NewGenerateService(
 		&stubAuthService{authCtx: domain.AuthContext{

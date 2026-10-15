@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -33,8 +34,9 @@ func proxyService(meter *resultMeter, pii string, providers map[string]ports.Pro
 	model := domain.PublicModel{
 		PublicModelID: "zai-org/glm-5.3-flash", ProviderModelID: "pm", UpstreamModelName: "glm-5-3-flash",
 		ProviderConfig:          domain.ProviderConfig{ProviderName: "primary"},
-		SupportsChatCompletions: true, SupportsChatCompletionsStream: true, SupportsTools: true, SupportsParallelToolCalls: true,
-		MaxContextWindow: 1000, MaxOutputTokens: 100,
+		SupportsChatCompletions: true,
+		Capabilities:            json.RawMessage(`{"streaming":true,"tool_call":true,"parallel_tool_calls":true}`),
+		MaxContextWindow:        1000, MaxOutputTokens: 100,
 	}
 	if fallback {
 		model.Fallback = &domain.ProviderTarget{ProviderModelID: "fm", UpstreamModelName: "glm-fallback", ProviderConfig: domain.ProviderConfig{ProviderName: "fallback"}}

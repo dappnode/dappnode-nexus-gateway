@@ -107,7 +107,7 @@ func TestStreamingUsageRetention(t *testing.T) {
 
 			model := domain.PublicModel{
 				PublicModelID: "local-repro", ProviderModelID: "local-repro", UpstreamModelName: "local-repro", Active: true,
-				SupportsChatCompletions: true, SupportsChatCompletionsStream: true, SupportsTools: true,
+				SupportsChatCompletions: true, Capabilities: json.RawMessage(`{"streaming":true,"tool_call":true}`),
 				ProviderConfig: domain.ProviderConfig{
 					ProviderName: "novita", BaseURL: upstream.URL,
 					APIKeySecretRef: "NEXUS_STREAM_REPRO_PROVIDER_KEY",

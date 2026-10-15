@@ -579,3 +579,24 @@ func stringPointer(value string) *string {
 func int64Pointer(value int64) *int64 {
 	return &value
 }
+
+// The operator's record is used as sent; a Metering that does not send one yet
+// still sends the flags it replaced.
+func TestRuntimePublicModelCapabilities(t *testing.T) {
+	model := validRuntimePublicModel("openai/gpt-test")
+	model.Capabilities = json.RawMessage(`{"modalities":{"input":["text","image"]},"tool_call":true}`)
+	if got := string(model.toDomain().Capabilities); got != `{"modalities":{"input":["text","image"]},"tool_call":true}` {
+		t.Fatalf("capabilities = %s", got)
+	}
+	model.Capabilities = nil
+	var legacy map[string]bool
+	if err := json.Unmarshal(model.toDomain().Capabilities, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"streaming": true, "tool_call": false, "parallel_tool_calls": false, "structured_output": false, "reasoning": false}
+	for key, value := range want {
+		if got, ok := legacy[key]; !ok || got != value {
+			t.Fatalf("capabilities from flags = %v", legacy)
+		}
+	}
+}

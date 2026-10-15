@@ -1,6 +1,10 @@
 package domain
 
-import "github.com/shopspring/decimal"
+import (
+	"encoding/json"
+
+	"github.com/shopspring/decimal"
+)
 
 const (
 	ProofModeNone                     = "none"
@@ -27,30 +31,28 @@ type ProviderTarget struct {
 
 // PublicModel is the fully-resolved model exposed by the gateway.
 type PublicModel struct {
-	ID                            string
-	PublicModelID                 string
-	DisplayName                   string
-	Description                   *string
-	ProviderModelID               string
-	UpstreamModelName             string
-	ServiceTier                   *string
-	ProviderConfig                ProviderConfig
-	Fallback                      *ProviderTarget
-	SupportsChatCompletions       bool
-	SupportsChatCompletionsStream bool
-	SupportsTools                 bool
-	SupportsParallelToolCalls     bool
-	SupportsStructuredOutput      bool
-	SupportsReasoning             bool
-	ProofMode                     string
-	MaxContextWindow              int
-	MaxOutputTokens               int
-	InputPricePerMillion          decimal.Decimal
-	OutputPricePerMillion         decimal.Decimal
-	CacheReadPricePerMillion      *decimal.Decimal
-	CacheWritePricePerMillion     *decimal.Decimal
-	Currency                      string
-	Active                        bool
+	ID                      string
+	PublicModelID           string
+	DisplayName             string
+	Description             *string
+	ProviderModelID         string
+	UpstreamModelName       string
+	ServiceTier             *string
+	ProviderConfig          ProviderConfig
+	Fallback                *ProviderTarget
+	SupportsChatCompletions bool // Routing: whether chat is served.
+	// Capabilities is the operator's description of the model, a JSON object
+	// published unchanged in /v1/models. Gateway never rejects requests by it.
+	Capabilities              json.RawMessage
+	ProofMode                 string
+	MaxContextWindow          int
+	MaxOutputTokens           int
+	InputPricePerMillion      decimal.Decimal
+	OutputPricePerMillion     decimal.Decimal
+	CacheReadPricePerMillion  *decimal.Decimal
+	CacheWritePricePerMillion *decimal.Decimal
+	Currency                  string
+	Active                    bool
 }
 
 func (m PublicModel) EffectiveProofMode() string {

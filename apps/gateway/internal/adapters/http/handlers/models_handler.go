@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -72,6 +73,7 @@ func toPublicModelData(m domain.PublicModel, eurToUSDRate float64) dto.ModelData
 		OutputPricePer1MTokensUSD:       priceToUSDPtr(m.Currency, m.OutputPricePerMillion, eurToUSDRate),
 		CacheReadPricePer1MTokensUSD:    pricePtrToUSDPtr(m.Currency, m.CacheReadPricePerMillion, eurToUSDRate),
 		CacheWritePricePer1MTokensUSD:   pricePtrToUSDPtr(m.Currency, m.CacheWritePricePerMillion, eurToUSDRate),
+		Capabilities:                    publishedCapabilities(m),
 		Features:                        modelFeatures(m),
 		Endpoints:                       modelEndpoints(m),
 		ProofMode:                       proofMode,
@@ -98,27 +100,45 @@ func modelFeatures(m domain.PublicModel) []string {
 	if m.SupportsEndpoint(domain.EndpointSystemOne) {
 		return []string{"structured-outputs"}
 	}
-	features := make([]string, 0, 5)
-	if m.SupportsChatCompletionsStream {
-		features = append(features, "streaming")
+	// features is the older summary of capabilities, kept for existing clients.
+	var stated struct {
+		Streaming         bool `json:"streaming"`
+		ToolCall          bool `json:"tool_call"`
+		ParallelToolCalls bool `json:"parallel_tool_calls"`
+		StructuredOutput  bool `json:"structured_output"`
+		Reasoning         bool `json:"reasoning"`
 	}
-	if m.SupportsTools {
-		features = append(features, "function-calling")
-	}
-	if m.SupportsParallelToolCalls {
-		features = append(features, "parallel-tool-calls")
-	}
-	if m.SupportsStructuredOutput {
-		features = append(features, "structured-outputs")
-	}
-	if m.SupportsReasoning {
-		features = append(features, "reasoning")
+	_ = json.Unmarshal(m.Capabilities, &stated)
+	features := make([]string, 0, 6)
+	for _, f := range []struct {
+		on   bool
+		name string
+	}{
+		{stated.Streaming, "streaming"},
+		{stated.ToolCall, "function-calling"},
+		{stated.ParallelToolCalls, "parallel-tool-calls"},
+		{stated.StructuredOutput, "structured-outputs"},
+		{stated.Reasoning, "reasoning"},
+	} {
+		if f.on {
+			features = append(features, f.name)
+		}
 	}
 	switch m.EffectiveProofMode() {
 	case domain.ProofModeTinfoilAttestedTransport:
 		features = append(features, "tinfoil-attested-transport")
 	}
 	return features
+}
+
+// publishedCapabilities is the operator's record, unchanged, or nothing when
+// the operator stated nothing.
+func publishedCapabilities(m domain.PublicModel) json.RawMessage {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(m.Capabilities, &object) != nil || len(object) == 0 {
+		return nil
+	}
+	return m.Capabilities
 }
 
 func modelEndpoints(m domain.PublicModel) []string {

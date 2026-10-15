@@ -1,5 +1,7 @@
 package dto
 
+import "encoding/json"
+
 // ModelsResponse is the response envelope for GET /v1/models.
 type ModelsResponse struct {
 	Object string      `json:"object"`
@@ -27,8 +29,11 @@ type ModelData struct {
 	OutputPricePer1MTokensUSD       *float64 `json:"output_price_per_1m_tokens_usd,omitempty"`
 	CacheReadPricePer1MTokensUSD    *float64 `json:"cache_read_price_per_1m_tokens_usd,omitempty"`
 	CacheWritePricePer1MTokensUSD   *float64 `json:"cache_write_price_per_1m_tokens_usd,omitempty"`
-	Features                        []string `json:"features"`
-	Endpoints                       []string `json:"endpoints"`
-	ProofMode                       string   `json:"proof_mode"`
-	ProofsEnabled                   bool     `json:"proofs_enabled"`
+	// Capabilities is what the operator states the model accepts, using
+	// models.dev field names. Features is its older summary.
+	Capabilities  json.RawMessage `json:"capabilities,omitempty"`
+	Features      []string        `json:"features"`
+	Endpoints     []string        `json:"endpoints"`
+	ProofMode     string          `json:"proof_mode"`
+	ProofsEnabled bool            `json:"proofs_enabled"`
 }
