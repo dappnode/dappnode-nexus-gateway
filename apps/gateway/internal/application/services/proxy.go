@@ -13,6 +13,7 @@ import (
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
+	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/observability/logfields"
 	"github.com/google/uuid"
@@ -72,7 +73,17 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
 		return nil, err
 	}
+	ctx, cancelInference := context.WithCancelCause(ctx)
+	stopRenewal := func() {}
+	if keeper, ok := s.metering.(ports.ReservationKeeper); ok {
+		stopRenewal = keeper.KeepReservation(ctx, reservationID, func() { cancelInference(domain.ErrInternal("credit reservation could not be maintained")) })
+	}
+	stopLease := func() { stopRenewal(); cancelInference(nil) }
 	finish := func(target domain.PublicModel, o outcome) {
+		defer stopLease()
+		if cause, ok := context.Cause(ctx).(*domain.GatewayError); ok && o.err != nil {
+			o.err = cause
+		}
 		o.err = sanitizeErrorWithPIIMapping(o.err, mapping)
 		s.finishProxy(ctx, authCtx, endpoint, execReq, target, requestID, reservationID, start, o)
 	}
@@ -138,6 +149,10 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		call, err = attempt(executed)
 	}
 	if err != nil {
+		defer stopLease()
+		if cause, ok := context.Cause(ctx).(*domain.GatewayError); ok {
+			err = cause
+		}
 		err = sanitizeErrorWithPIIMapping(err, mapping)
 		fields := s.buildErrorLogFields(ctx, requestID, &authCtx, endpoint, execReq.PublicModelID, executed, err, time.Since(start).Milliseconds())
 		s.logger.Error("provider request failed", fields...)

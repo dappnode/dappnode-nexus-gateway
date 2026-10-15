@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
@@ -19,9 +20,10 @@ import (
 )
 
 type Client struct {
-	baseURL string
-	token   string
-	http    *http.Client
+	baseURL      string
+	token        string
+	http         *http.Client
+	reservations sync.Map // Unclaimed leases by reservation ID, removed by KeepReservation.
 }
 
 func NewClient(baseURL, token string, timeout time.Duration) *Client {
@@ -58,11 +60,15 @@ func (c *Client) Reserve(ctx context.Context, auth domain.AuthContext, endpoint 
 		MaxOutputTokens:        req.MaxOutputTokens,
 	}
 	var res reserveResponse
+	sent := time.Now() // A lease measured from here never outlasts Metering's.
 	if err := c.postJSON(ctx, "/internal/metering/reservations", payload, &res, 2); err != nil {
 		return "", err
 	}
 	if res.ReservationID == "" {
 		return "", meteringInternalError("reason", "missing reservation_id")
+	}
+	if res.LeaseMS > 0 {
+		c.reservations.Store(res.ReservationID, newLease(sent, res.LeaseMS))
 	}
 	return res.ReservationID, nil
 }
@@ -365,6 +371,8 @@ func meteringOperation(method, path string) string {
 		return "reserve"
 	case method == http.MethodPost && strings.Contains(requestPath, "/reservations/") && strings.HasSuffix(requestPath, "/complete"):
 		return "complete"
+	case method == http.MethodPost && strings.Contains(requestPath, "/reservations/") && strings.HasSuffix(requestPath, "/renew"):
+		return "renew"
 	case method == http.MethodPost && strings.HasSuffix(requestPath, "/usage-failures"):
 		return "record_failure"
 	case method == http.MethodPost && strings.HasSuffix(requestPath, "/authenticate"):
@@ -413,6 +421,7 @@ type reserveRequest struct {
 
 type reserveResponse struct {
 	ReservationID string `json:"reservation_id"`
+	LeaseMS       int64  `json:"lease_ms,omitempty"`
 }
 
 type completeRequest struct {

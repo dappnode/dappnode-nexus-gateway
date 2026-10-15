@@ -14,3 +14,9 @@ type UsageMeter interface {
 	RecordSuccess(ctx context.Context, reservationID string, auth domain.AuthContext, endpoint string, req domain.GenerateRequest, resp domain.GenerateResult, model domain.PublicModel, latencyMs int64) error
 	RecordFailure(ctx context.Context, reservationID *string, auth *domain.AuthContext, endpoint string, req *domain.GenerateRequest, model *domain.PublicModel, err error, partialUsage *domain.Usage, latencyMs int64) error
 }
+
+// ReservationKeeper maintains a live credit hold while inference progresses.
+// onLost stops inference only when renewal cannot preserve the hold.
+type ReservationKeeper interface {
+	KeepReservation(context.Context, string, func()) func()
+}
