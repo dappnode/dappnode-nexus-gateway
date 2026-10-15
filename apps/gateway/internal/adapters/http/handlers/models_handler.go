@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -72,7 +73,7 @@ func toPublicModelData(m domain.PublicModel, eurToUSDRate float64) dto.ModelData
 		OutputPricePer1MTokensUSD:       priceToUSDPtr(m.Currency, m.OutputPricePerMillion, eurToUSDRate),
 		CacheReadPricePer1MTokensUSD:    pricePtrToUSDPtr(m.Currency, m.CacheReadPricePerMillion, eurToUSDRate),
 		CacheWritePricePer1MTokensUSD:   pricePtrToUSDPtr(m.Currency, m.CacheWritePricePerMillion, eurToUSDRate),
-		Features:                        modelFeatures(m),
+		Capabilities:                    publishedCapabilities(m),
 		Endpoints:                       modelEndpoints(m),
 		ProofMode:                       proofMode,
 		ProofsEnabled:                   domain.ProofModeEnabled(proofMode),
@@ -88,37 +89,19 @@ func toRouterData(r domain.RouterEntry) dto.ModelData {
 		Created:     r.CreatedAt.Unix(),
 		DisplayName: r.DisplayName,
 		Description: r.Description,
-		Features:    []string{"routing"},
 		Endpoints:   []string{"chat/completions"},
 		ProofMode:   domain.ProofModeNone,
 	}
 }
 
-func modelFeatures(m domain.PublicModel) []string {
-	if m.SupportsEndpoint(domain.EndpointSystemOne) {
-		return []string{"structured-outputs"}
+// publishedCapabilities is the operator's record, unchanged, or nothing when
+// the operator stated nothing.
+func publishedCapabilities(m domain.PublicModel) json.RawMessage {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(m.Capabilities, &object) != nil || len(object) == 0 {
+		return nil
 	}
-	features := make([]string, 0, 5)
-	if m.SupportsChatCompletionsStream {
-		features = append(features, "streaming")
-	}
-	if m.SupportsTools {
-		features = append(features, "function-calling")
-	}
-	if m.SupportsParallelToolCalls {
-		features = append(features, "parallel-tool-calls")
-	}
-	if m.SupportsStructuredOutput {
-		features = append(features, "structured-outputs")
-	}
-	if m.SupportsReasoning {
-		features = append(features, "reasoning")
-	}
-	switch m.EffectiveProofMode() {
-	case domain.ProofModeTinfoilAttestedTransport:
-		features = append(features, "tinfoil-attested-transport")
-	}
-	return features
+	return m.Capabilities
 }
 
 func modelEndpoints(m domain.PublicModel) []string {

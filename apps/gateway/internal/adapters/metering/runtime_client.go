@@ -322,29 +322,41 @@ func jsonObject(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &object) == nil && object != nil
 }
 
+// capabilities is the operator's record from Metering. A Metering that does not
+// send one yet still sends the flags it replaced, so they are used instead.
+func (m runtimePublicModel) capabilities() json.RawMessage {
+	if jsonObject(m.Capabilities) {
+		return m.Capabilities
+	}
+	legacy, _ := json.Marshal(map[string]bool{
+		"streaming":           *m.SupportsChatCompletionsStream,
+		"tool_call":           *m.SupportsTools,
+		"parallel_tool_calls": *m.SupportsParallelToolCalls,
+		"structured_output":   *m.SupportsStructuredOutput,
+		"reasoning":           *m.SupportsReasoning,
+	})
+	return legacy
+}
+
 func (m runtimePublicModel) toDomain() domain.PublicModel {
 	model := domain.PublicModel{
-		ID:                            m.ID,
-		PublicModelID:                 m.PublicModelID,
-		DisplayName:                   m.DisplayName,
-		Description:                   m.Description,
-		ProviderModelID:               m.ProviderModelID,
-		UpstreamModelName:             m.UpstreamModelName,
-		ServiceTier:                   m.ServiceTier,
-		ProviderConfig:                m.ProviderConfig.toDomain(),
-		SupportsChatCompletions:       *m.SupportsChatCompletions,
-		SupportsChatCompletionsStream: *m.SupportsChatCompletionsStream,
-		SupportsTools:                 *m.SupportsTools,
-		SupportsParallelToolCalls:     *m.SupportsParallelToolCalls,
-		SupportsStructuredOutput:      *m.SupportsStructuredOutput,
-		SupportsReasoning:             *m.SupportsReasoning,
-		ProofMode:                     m.ProofMode,
-		MaxContextWindow:              m.MaxContextWindow,
-		MaxOutputTokens:               m.MaxOutputTokens,
-		InputPricePerMillion:          priceFromMicrocents(*m.InputPricePer1MTokensMicrocents),
-		OutputPricePerMillion:         priceFromMicrocents(*m.OutputPricePer1MTokensMicrocents),
-		Currency:                      m.Currency,
-		Active:                        m.Active,
+		ID:                      m.ID,
+		PublicModelID:           m.PublicModelID,
+		DisplayName:             m.DisplayName,
+		Description:             m.Description,
+		ProviderModelID:         m.ProviderModelID,
+		UpstreamModelName:       m.UpstreamModelName,
+		ServiceTier:             m.ServiceTier,
+		ProviderConfig:          m.ProviderConfig.toDomain(),
+		SupportsChatCompletions: *m.SupportsChatCompletions,
+		Capabilities:            m.capabilities(),
+		ProofMode:               m.ProofMode,
+		MaxContextWindow:        m.MaxContextWindow,
+		MaxOutputTokens:         m.MaxOutputTokens,
+		InputPricePerMillion:    priceFromMicrocents(*m.InputPricePer1MTokensMicrocents),
+		OutputPricePerMillion:   priceFromMicrocents(*m.OutputPricePer1MTokensMicrocents),
+		Currency:                m.Currency,
+		Active:                  m.Active,
 	}
 	if m.Fallback != nil {
 		model.Fallback = &domain.ProviderTarget{
@@ -429,6 +441,7 @@ type runtimePublicModel struct {
 	SupportsParallelToolCalls            *bool                  `json:"supports_parallel_tool_calls"`
 	SupportsStructuredOutput             *bool                  `json:"supports_structured_output"`
 	SupportsReasoning                    *bool                  `json:"supports_reasoning"`
+	Capabilities                         json.RawMessage        `json:"capabilities,omitempty"`
 	ProofMode                            string                 `json:"proof_mode"`
 	MaxContextWindow                     int                    `json:"max_context_window"`
 	MaxOutputTokens                      int                    `json:"max_output_tokens"`
