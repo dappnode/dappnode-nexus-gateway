@@ -46,26 +46,18 @@ func WriteErrorWithLog(w http.ResponseWriter, r *http.Request, logger ports.Logg
 		gwErr = domain.ErrInternal("an internal error occurred")
 	}
 
-	// Log at warn for client errors, error for server errors.
+	// Log at warn for client errors, error for server errors. Provider errors
+	// can echo prompts: only the classification and log-safe metadata go in.
+	fields := []any{
+		"request_id", middleware.GetRequestID(r.Context()),
+		"path", r.URL.Path,
+		"status", gwErr.HTTPStatus,
+	}
+	fields = append(fields, domain.DiagnosticFields(gwErr)...)
 	if gwErr.HTTPStatus >= 500 {
-		fields := []any{
-			"request_id", middleware.GetRequestID(r.Context()),
-			"status", gwErr.HTTPStatus,
-			"gateway_status", gwErr.HTTPStatus,
-			"error_code", gwErr.Code,
-		}
-		// Provider errors can echo prompts; only retain numeric upstream status.
-		if status, ok := gwErr.Metadata["upstream_status"].(int); ok {
-			fields = append(fields, "upstream_status", status)
-		}
 		logger.Error("request failed", fields...)
 	} else if gwErr.HTTPStatus >= 400 {
-		logger.Warn("request error",
-			"request_id", middleware.GetRequestID(r.Context()),
-			"status", gwErr.HTTPStatus,
-			"gateway_status", gwErr.HTTPStatus,
-			"error_code", gwErr.Code,
-		)
+		logger.Warn("request error", fields...)
 	}
 
 	if gwErr.RetryAfter != "" {

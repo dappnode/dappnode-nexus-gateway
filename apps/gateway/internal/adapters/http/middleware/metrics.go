@@ -12,11 +12,18 @@ import (
 // intentionally placed as the outermost middleware so the recorded duration
 // covers the full handler chain.
 //
-// The route label is read from r.Pattern after the handler runs, because the
-// stdlib ServeMux only populates it when dispatching to a matched route
-// handler. Requests that match no route use the fixed "unmatched" label so a
-// flood of 404s cannot create unbounded series.
-func Metrics(next http.Handler) http.Handler {
+// The route label comes from route, which names the mux pattern a request
+// matches: inner middleware passes the mux a copy of the request, so
+// r.Pattern is never set on the request seen here. Requests that match no
+// route use the fixed "unmatched" label so a flood of 404s cannot create
+// unbounded series.
+func Metrics(route func(*http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return metricsHandler(next, route)
+	}
+}
+
+func metricsHandler(next http.Handler, routeOf func(*http.Request) string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mw := &metricsWriter{ResponseWriter: w, status: http.StatusOK}
 
@@ -26,7 +33,7 @@ func Metrics(next http.Handler) http.Handler {
 		duration := time.Since(start).Seconds()
 		metrics.HTTPInflight.Dec()
 
-		route := r.Pattern
+		route := routeOf(r)
 		if route == "" {
 			route = "unmatched"
 		}

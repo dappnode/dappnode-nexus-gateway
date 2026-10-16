@@ -76,6 +76,8 @@ jobs:
             --label org.opencontainers.image.source=https://github.com/dappnode/dappnode-nexus-gateway \
             --label org.opencontainers.image.revision=${{ github.sha }} \
             --label org.opencontainers.image.version="$VERSION" \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT=${{ github.sha }} \
             -t "$ECR_REGISTRY/$IMAGE_NAME:$VERSION" \
             -t "$ECR_REGISTRY/$IMAGE_NAME:latest" \
             -t "$ECR_REGISTRY/$IMAGE_NAME:sha-${{ github.sha }}" \

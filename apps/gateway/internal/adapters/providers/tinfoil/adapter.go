@@ -65,6 +65,7 @@ func NewAdapterWithFactory(timeout time.Duration, factory VerifiedClientFactory,
 func missingProviderCredentialError() *domain.GatewayError {
 	return domain.ErrInternal("an internal error occurred").WithMeta(
 		"provider", providerName,
+		"cause", domain.CauseProviderKeyMissing,
 		"reason", "provider API key is not configured",
 	)
 }

@@ -4,8 +4,11 @@
 package metrics
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
 
+	"github.com/dappnode/dappnode-nexus-gateway/pkg/buildinfo"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -187,6 +190,51 @@ var (
 	)
 )
 
+// Error and build metrics. ErrorsTotal classifies every failed generation, so
+// an error rate can count provider and Nexus faults without caller mistakes.
+var (
+	ErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "nexus_gateway_errors_total",
+			Help: "Total failed generations, by endpoint, model, provider, phase (request|provider|stream), fault (caller|provider|nexus|unclear), error code and upstream status.",
+		},
+		[]string{"endpoint", "model", "provider", "phase", "fault", "error_code", "upstream_status"},
+	)
+
+	BuildInfo = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "nexus_gateway_build_info",
+			Help: "Always 1, labeled by the running gateway's version and commit.",
+		},
+		[]string{"version", "commit"},
+	)
+)
+
+// Error phases: where in a request the failure happened.
+const (
+	PhaseRequest  = "request"  // Before any provider call: auth, routing, validation, PII, credit.
+	PhaseProvider = "provider" // The provider failed before any output reached the client.
+	PhaseStream   = "stream"   // The response failed after output began.
+)
+
+// UnresolvedModel labels requests whose model was never resolved, so caller
+// supplied names cannot create metric series.
+const UnresolvedModel = "unresolved"
+
+// RecordError counts a failed generation.
+func RecordError(endpoint, model, provider, phase string, err error) {
+	upstream := "none"
+	if status := domain.UpstreamStatus(err); status > 0 {
+		upstream = strconv.Itoa(status)
+	}
+	code := domain.ErrCodeInternalError
+	var gwErr *domain.GatewayError
+	if errors.As(err, &gwErr) {
+		code = gwErr.Code
+	}
+	ErrorsTotal.WithLabelValues(endpoint, model, provider, phase, domain.FaultOf(err), code, upstream).Inc()
+}
+
 func init() {
 	prometheus.MustRegister(
 		HTTPRequestsTotal,
@@ -207,7 +255,10 @@ func init() {
 		AttestationOperationsTotal,
 		AttestationDuration,
 		ProviderRetries,
+		ErrorsTotal,
+		BuildInfo,
 	)
+	BuildInfo.WithLabelValues(buildinfo.Version, buildinfo.Commit).Set(1)
 }
 
 // Handler returns the Prometheus metrics HTTP handler.

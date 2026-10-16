@@ -96,14 +96,16 @@ func (s *GenerateService) logFallback(requestID string, primary, fallback domain
 	if s.logger == nil {
 		return
 	}
-	s.logger.Warn("provider failed; trying fallback",
+	fields := []any{
 		"request_id", requestID,
+		"model", primary.PublicModelID,
 		"provider", primary.ProviderConfig.ProviderName,
 		"provider_model", primary.UpstreamModelName,
 		"fallback_provider", fallback.ProviderConfig.ProviderName,
 		"fallback_provider_model", fallback.UpstreamModelName,
 		"error_type", fmt.Sprintf("%T", err),
-	)
+	}
+	s.logger.Warn("provider failed; trying fallback", append(fields, domain.DiagnosticFields(err)...)...)
 }
 
 func (s *GenerateService) resolveModel(ctx context.Context, req domain.GenerateRequest) (domain.PublicModel, domain.GenerateRequest, error) {
@@ -130,6 +132,7 @@ func (s *GenerateService) resolveModel(ctx context.Context, req domain.GenerateR
 	if s.router == nil {
 		return domain.PublicModel{}, req, domain.ErrInternal("an internal error occurred").WithMeta(
 			"dependency", "router",
+			"cause", domain.CauseRouterMissing,
 			"reason", "router client is not configured",
 		)
 	}
@@ -144,6 +147,7 @@ func (s *GenerateService) resolveModel(ctx context.Context, req domain.GenerateR
 	if decision.PublicModelID == "" {
 		return domain.PublicModel{}, req, domain.ErrInternal("an internal error occurred").WithMeta(
 			"dependency", "router",
+			"cause", domain.CauseRouterEmptyModel,
 			"reason", "router returned an empty public_model_id",
 		)
 	}
@@ -245,20 +249,32 @@ func (s *GenerateService) recordGeneration(outcome, endpoint string, req domain.
 // exists; otherwise it records the request as unrouted so no terminal outcome
 // is silently dropped.
 func (s *GenerateService) recordTerminalOutcome(outcome, endpoint string, req domain.GenerateRequest, model *domain.PublicModel, latencyMs int64) {
-	providerName := "unknown"
-	if model != nil {
-		providerName = model.ProviderConfig.ProviderName
-	}
+	modelLabel, providerName := metricLabels(req, model)
 	stream := strconv.FormatBool(req.Stream)
 	metrics.GenerationsTotal.WithLabelValues(
 		endpoint,
-		req.PublicModelID,
+		modelLabel,
 		providerName,
 		stream,
 		outcome,
 	).Inc()
-	metrics.GenerationDuration.WithLabelValues(endpoint, req.PublicModelID, providerName, stream).
+	metrics.GenerationDuration.WithLabelValues(endpoint, modelLabel, providerName, stream).
 		Observe(float64(latencyMs) / 1000.0)
+}
+
+// recordError classifies a failed generation in the error metric.
+func (s *GenerateService) recordError(endpoint string, req domain.GenerateRequest, model *domain.PublicModel, phase string, err error) {
+	modelLabel, providerName := metricLabels(req, model)
+	metrics.RecordError(endpoint, modelLabel, providerName, phase, err)
+}
+
+// metricLabels names the model and provider for metrics. A model that never
+// resolved is labeled as such: its name came from the caller.
+func metricLabels(req domain.GenerateRequest, model *domain.PublicModel) (string, string) {
+	if model == nil {
+		return metrics.UnresolvedModel, "unknown"
+	}
+	return req.PublicModelID, model.ProviderConfig.ProviderName
 }
 
 // buildErrorLogFields builds a structured log field slice for error conditions,
@@ -276,17 +292,9 @@ func (s *GenerateService) buildErrorLogFields(ctx context.Context, requestID str
 	if authCtx != nil {
 		fields = append(fields, "account_id", authCtx.Account.ID)
 	}
-	// Merge structured upstream metadata from GatewayError if present.
-	var gwErr *domain.GatewayError
-	if errors.As(err, &gwErr) {
-		fields = append(fields, "error_code", gwErr.Code)
-		fields = append(fields, "gateway_status", gwErr.HTTPStatus)
-		// Upstream messages and arbitrary metadata may echo request contents.
-		if status, ok := gwErr.Metadata["upstream_status"].(int); ok {
-			fields = append(fields, "upstream_status", status)
-		}
-	}
-	return fields
+	// Classification and log-safe metadata only: upstream messages and
+	// arbitrary metadata may echo request contents.
+	return append(fields, domain.DiagnosticFields(err)...)
 }
 
 func (s *GenerateService) storeTinfoilProof(ctx context.Context, auth domain.AuthContext, model domain.PublicModel, result domain.GenerateResult) {

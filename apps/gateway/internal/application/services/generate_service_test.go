@@ -8,9 +8,11 @@ import (
 	"testing"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
+	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/shopspring/decimal"
 )
 
@@ -581,5 +583,46 @@ func TestRequestRejectionDoesNotChangeProvider(t *testing.T) {
 		if !shouldTryFallback(context.Background(), err, fallback) {
 			t.Fatalf("%v did not permit configured fallback", err)
 		}
+	}
+}
+
+// A request for a model that doesn't exist is the caller's mistake: it is
+// classified as such, named in the log, and cannot create metric series.
+func TestProxy_ClassifiesUnknownModelAsCallerFault(t *testing.T) {
+	svc := NewGenerateService(
+		&stubAuthService{authCtx: domain.AuthContext{
+			Account: domain.Account{ID: "acc1", Status: domain.AccountStatusActive},
+			APIKey:  domain.APIKey{ID: "key1", Active: true},
+		}},
+		&stubModelCatalog{models: map[string]domain.PublicModel{}},
+		nil,
+		nil,
+		&stubUsageMeter{},
+		nil,
+		stubLogger{},
+	)
+	counter := metrics.ErrorsTotal.WithLabelValues(domain.EndpointChatCompletions, metrics.UnresolvedModel, "unknown",
+		metrics.PhaseRequest, domain.FaultCaller, domain.ErrCodeUnsupportedModel, "none")
+	before := testutil.ToFloat64(counter)
+
+	_, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{}`), domain.GenerateRequest{
+		PublicModelID: "deepseek/deepseek-v4-flash",
+	}, "sk-test")
+
+	gwErr, ok := err.(*domain.GatewayError)
+	if !ok || gwErr.Code != domain.ErrCodeUnsupportedModel {
+		t.Fatalf("error = %v, want unsupported_model", err)
+	}
+	if gwErr.Metadata["requested_model"] != "deepseek/deepseek-v4-flash" || gwErr.Metadata["account_id"] != "acc1" {
+		t.Fatalf("metadata = %v", gwErr.Metadata)
+	}
+	if got := testutil.ToFloat64(counter) - before; got != 1 {
+		t.Fatalf("errors_total delta = %v, want 1", got)
+	}
+	if n := testutil.CollectAndCount(metrics.GenerationsTotal, "nexus_gateway_generations_total"); n == 0 {
+		t.Fatal("no generation series recorded")
+	}
+	if testutil.ToFloat64(metrics.GenerationsTotal.WithLabelValues(domain.EndpointChatCompletions, "deepseek/deepseek-v4-flash", "unknown", "false", metrics.OutcomeError)) != 0 {
+		t.Fatal("the caller's model name became a metric label")
 	}
 }
