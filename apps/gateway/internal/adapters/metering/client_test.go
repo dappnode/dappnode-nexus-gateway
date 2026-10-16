@@ -62,6 +62,7 @@ func TestClientReserve_ExhaustedServerErrorsReturnInternalError(t *testing.T) {
 	client := NewClient(server.URL, "token", time.Second)
 	_, err := client.Reserve(context.Background(), testAuth(), domain.EndpointChatCompletions, domain.GenerateRequest{PublicModelID: "model"}, testModel(), "gw-1")
 	assertInternalMeteringError(t, err)
+	assertMeteringCause(t, err, domain.CauseMeteringErrorStatus)
 	if got := attempts.Load(); got != 3 {
 		t.Fatalf("attempts = %d, want 3", got)
 	}
@@ -75,6 +76,17 @@ func TestClientReserve_TransportFailureReturnsInternalError(t *testing.T) {
 	client := NewClient(serverURL, "token", time.Second)
 	_, err := client.Reserve(context.Background(), testAuth(), domain.EndpointChatCompletions, domain.GenerateRequest{PublicModelID: "model"}, testModel(), "gw-1")
 	assertInternalMeteringError(t, err)
+	assertMeteringCause(t, err, domain.CauseMeteringUnreachable)
+}
+
+// assertMeteringCause checks that a metering failure names its cause, so an
+// internal error can be traced to metering without reading free text.
+func assertMeteringCause(t *testing.T, err error, want string) {
+	t.Helper()
+	var gwErr *domain.GatewayError
+	if !errors.As(err, &gwErr) || gwErr.Metadata["cause"] != want || gwErr.Metadata["dependency"] != "metering" {
+		t.Fatalf("error = %v, metadata = %v; want dependency metering, cause %s", err, gwErr.Metadata, want)
+	}
 }
 
 func TestClientReserve_RetriesAmbiguousResponseWithStableRequestID(t *testing.T) {

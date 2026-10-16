@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
@@ -44,11 +46,15 @@ func (s *GenerateService) maskBody(ctx context.Context, raw []byte, piiMode, end
 		surfaceCounts: make(map[string]int),
 	}
 	if err := masker.maskBody(body, endpoint); err != nil {
-		s.logger.Warn("pii filter error", "error", err, "fail_open", s.piiFailOpen)
+		if ctx.Err() != nil {
+			return nil, nil, domain.ErrClientCanceled() // The client left; the analyzer did not fail.
+		}
+		cause := piiFailureCause(err)
+		s.logger.Warn("pii filter error", "request_id", middleware.GetRequestID(ctx), "error", err, "cause", cause, "fail_open", s.piiFailOpen)
 		if s.piiFailOpen {
 			return raw, nil, nil
 		}
-		return nil, nil, domain.ErrInternal("an internal error occurred")
+		return nil, nil, domain.ErrInternal("an internal error occurred").WithMeta("dependency", "pii", "cause", cause)
 	}
 	if masker.mapping.Len() == 0 {
 		return raw, nil, nil
@@ -61,9 +67,18 @@ func (s *GenerateService) maskBody(ctx context.Context, raw []byte, piiMode, end
 	)
 	masked, err := marshalNoEscape(body)
 	if err != nil {
-		return nil, nil, domain.ErrInternal("an internal error occurred")
+		return nil, nil, domain.ErrInternal("an internal error occurred").WithMeta("dependency", "pii", "cause", domain.CausePIIFilterFailed)
 	}
 	return masked, masker.mapping, nil
+}
+
+// piiFailureCause tells a PII analyzer timeout from other analyzer failures.
+func piiFailureCause(err error) string {
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return domain.CausePIIFilterTimeout
+	}
+	return domain.CausePIIFilterFailed
 }
 
 func (m *requestPIIMasker) maskBody(body map[string]any, endpoint string) error {

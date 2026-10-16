@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dappnode/dappnode-nexus-gateway/pkg/buildinfo"
 	"go.uber.org/zap"
 )
 
@@ -64,6 +65,8 @@ func requestLoggingConfig(level string) (zap.Config, bool) {
 	// Request diagnostics are accounting evidence. Zap's production sampler
 	// groups by message, so distinct request IDs can otherwise be dropped.
 	cfg.Sampling = nil
+	// Every line names the build, so errors can be tied to a release.
+	cfg.InitialFields = map[string]any{"version": buildinfo.Version}
 	cfg.Level = zap.NewAtomicLevel()
 	verbose := false
 

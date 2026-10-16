@@ -43,8 +43,18 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 
 	authCtx, err := s.auth.AuthenticateAPIKey(ctx, bearerToken)
 	if err != nil {
+		err = clientGone(ctx, err)
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
+		s.recordError(endpoint, req, nil, metrics.PhaseRequest, err)
 		return nil, err
+	}
+	// reject names the account and model on an error that ends the request
+	// before any provider call, for the handler's log line.
+	reject := func(err error, model *domain.PublicModel) error {
+		if model == nil {
+			return domain.Annotate(err, "account_id", authCtx.Account.ID, "requested_model", req.PublicModelID)
+		}
+		return domain.Annotate(err, "account_id", authCtx.Account.ID, "model", model.PublicModelID, "provider", model.ProviderConfig.ProviderName)
 	}
 	var model domain.PublicModel
 	execReq := req
@@ -54,29 +64,38 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		model, execReq, err = s.resolveModel(ctx, req)
 	}
 	if err != nil {
+		err = clientGone(ctx, err)
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
-		return nil, err
+		s.recordError(endpoint, req, nil, metrics.PhaseRequest, err)
+		return nil, reject(err, nil)
 	}
 	if err := s.validateRequest(endpoint, execReq, model); err != nil {
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
+		s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
-		return nil, err
+		return nil, reject(err, &model)
 	}
 	masked, mapping, err := s.maskBody(ctx, raw, authCtx.APIKey.PIIMode, endpoint)
 	if err != nil {
+		err = clientGone(ctx, err)
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
+		s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
-		return nil, err
+		return nil, reject(err, &model)
 	}
 	reservationID, err := s.metering.Reserve(ctx, authCtx, endpoint, execReq, model, uuid.NewString())
 	if err != nil {
+		err = clientGone(ctx, err)
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
-		return nil, err
+		s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
+		return nil, reject(err, &model)
 	}
 	ctx, cancelInference := context.WithCancelCause(ctx)
 	stopRenewal := func() {}
 	if keeper, ok := s.metering.(ports.ReservationKeeper); ok {
-		stopRenewal = keeper.KeepReservation(ctx, reservationID, func() { cancelInference(domain.ErrInternal("credit reservation could not be maintained")) })
+		stopRenewal = keeper.KeepReservation(ctx, reservationID, func() {
+			cancelInference(domain.ErrInternal("credit reservation could not be maintained").WithMeta("dependency", "metering", "cause", domain.CauseCreditHoldLost))
+		})
 	}
 	stopLease := func() { stopRenewal(); cancelInference(nil) }
 	finish := func(target domain.PublicModel, o outcome) {
@@ -98,7 +117,10 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		}
 		provider, err := s.registry.GetProvider(target.ProviderConfig.ProviderName)
 		if err != nil {
-			return nil, domain.ErrProviderUnavailable(target.ProviderConfig.ProviderName)
+			// A provider name the catalog uses but this build doesn't know is
+			// Nexus's configuration, not the provider's outage.
+			return nil, domain.ErrProviderUnavailable(target.ProviderConfig.ProviderName).WithMeta(
+				"fault", domain.FaultNexus, "cause", domain.CauseProviderNotRegistered)
 		}
 		upstreamStart := time.Now()
 		if !execReq.Stream {
@@ -146,6 +168,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		withProviderTarget(model, *model.Fallback).SupportsEndpoint(endpoint) {
 		executed = withProviderTarget(model, *model.Fallback)
 		s.logFallback(requestID, model, executed, sanitizeErrorWithPIIMapping(err, mapping))
+		metrics.RecordFallback(endpoint, model.PublicModelID, model.ProviderConfig.ProviderName, executed.ProviderConfig.ProviderName, err)
 		call, err = attempt(executed)
 	}
 	if err != nil {
@@ -157,6 +180,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		fields := s.buildErrorLogFields(ctx, requestID, &authCtx, endpoint, execReq.PublicModelID, executed, err, time.Since(start).Milliseconds())
 		s.logger.Error("provider request failed", fields...)
 		s.recordGeneration(metrics.OutcomeError, endpoint, execReq, executed, time.Since(start).Milliseconds())
+		s.recordError(endpoint, execReq, &executed, metrics.PhaseProvider, err)
 		s.recordFailure(ctx, &reservationID, &authCtx, endpoint, &execReq, &executed, err, nil, time.Since(start).Milliseconds())
 		return nil, err
 	}
@@ -188,8 +212,14 @@ func (s *GenerateService) finishProxy(ctx context.Context, authCtx domain.AuthCo
 		"chunks_received", o.chunks, "malformed_chunks", o.malformed,
 	}
 	if o.err != nil {
-		s.logger.Error("generation failed", append(fields, "error_type", fmt.Sprintf("%T", o.err))...)
+		fields = append(fields, "error_type", fmt.Sprintf("%T", o.err))
+		s.logger.Error("generation failed", append(fields, domain.DiagnosticFields(o.err)...)...)
 		s.recordGeneration(metrics.OutcomeError, endpoint, req, model, latencyMs)
+		phase := metrics.PhaseProvider
+		if req.Stream {
+			phase = metrics.PhaseStream
+		}
+		s.recordError(endpoint, req, &model, phase, o.err)
 		s.recordFailure(ctx, &reservationID, &authCtx, endpoint, &req, &model, o.err, o.usage, latencyMs)
 		return
 	}

@@ -20,7 +20,11 @@ func NewAdapter(timeout time.Duration) *Adapter { return &Adapter{client: openai
 func (a *Adapter) Complete(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
 	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
 	if apiKey == "" {
-		return nil, nil, domain.ErrInternal("provider API key is not configured")
+		return nil, nil, domain.ErrInternal("an internal error occurred").WithMeta(
+			"provider", "typesafe",
+			"cause", domain.CauseProviderKeyMissing,
+			"reason", "provider API key is not configured",
+		)
 	}
 	var body map[string]any
 	dec := json.NewDecoder(bytes.NewReader(raw))

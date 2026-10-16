@@ -65,7 +65,7 @@ func (c *Client) Reserve(ctx context.Context, auth domain.AuthContext, endpoint 
 		return "", err
 	}
 	if res.ReservationID == "" {
-		return "", meteringInternalError("reason", "missing reservation_id")
+		return "", meteringInternalError("cause", domain.CauseMeteringBadResponse, "reason", "missing reservation_id")
 	}
 	if res.LeaseMS > 0 {
 		c.reservations.Store(res.ReservationID, newLease(sent, res.LeaseMS))
@@ -194,7 +194,7 @@ func (c *Client) requestJSONOnce(ctx context.Context, method, path string, paylo
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return newRetryableRequestError(meteringInternalError("reason", err.Error()))
+		return newRetryableRequestError(meteringInternalError("cause", domain.CauseMeteringUnreachable, "reason", err.Error()))
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
@@ -215,14 +215,14 @@ func (c *Client) requestJSONOnce(ctx context.Context, method, path string, paylo
 			metrics.MeteringRequests.WithLabelValues(op, "protocol_error").Inc()
 			metrics.MeteringDuration.WithLabelValues(op).Observe(time.Since(start).Seconds())
 			return newRetryableRequestError(
-				meteringInternalError("reason", "missing response body"),
+				meteringInternalError("cause", domain.CauseMeteringBadResponse, "reason", "missing response body"),
 			)
 		}
 		if err := decodeJSONResponse(res.Body, out); err != nil {
 			metrics.MeteringRequests.WithLabelValues(op, "protocol_error").Inc()
 			metrics.MeteringDuration.WithLabelValues(op).Observe(time.Since(start).Seconds())
 			return newRetryableRequestError(
-				meteringInternalError("reason", "invalid response body: "+err.Error()),
+				meteringInternalError("cause", domain.CauseMeteringBadResponse, "reason", "invalid response body: "+err.Error()),
 			)
 		}
 	}
@@ -310,7 +310,7 @@ func userFacingMeteringError(method, path string, status int, envelope errorResp
 }
 
 func meteringResponseError(status int, code string) *domain.GatewayError {
-	err := meteringInternalError("metering_status", status)
+	err := meteringInternalError("cause", domain.CauseMeteringErrorStatus, "metering_status", status)
 	if code != "" {
 		err = err.WithMeta("metering_code", code)
 	}

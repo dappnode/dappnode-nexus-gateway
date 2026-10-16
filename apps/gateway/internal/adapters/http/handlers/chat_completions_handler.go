@@ -33,19 +33,19 @@ func NewChatCompletionsHandler(service *services.ChatCompletionsService, logger 
 func (h *ChatCompletionsHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	token, err := ExtractBearerToken(r)
 	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, err)
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, err)
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
 	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("failed to read request body"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("failed to read request body"))
 		return
 	}
 
 	genReq, err := mapper.ChatCompletionRequestToDomain(body)
 	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, err)
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, err)
 		return
 	}
 

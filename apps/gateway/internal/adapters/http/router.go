@@ -42,7 +42,12 @@ func NewRouter(
 	handler = middleware.Logging(logger)(handler)
 	handler = middleware.Recovery(logger)(handler)
 	handler = middleware.RequestID(handler)
-	handler = middleware.Metrics(handler)
+	// Middleware hands the mux a copy of the request, so the route pattern is
+	// read from the mux rather than from the request the metrics see.
+	handler = middleware.Metrics(func(r *http.Request) string {
+		_, pattern := mux.Handler(r)
+		return pattern
+	})(handler)
 
 	return handler
 }

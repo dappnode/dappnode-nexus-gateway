@@ -39,6 +39,7 @@ func NewAdapter(timeout time.Duration, logger ...ports.Logger) *Adapter {
 func missingProviderCredentialError(providerName string) *domain.GatewayError {
 	return domain.ErrInternal("an internal error occurred").WithMeta(
 		"provider", providerName,
+		"cause", domain.CauseProviderKeyMissing,
 		"reason", "provider API key is not configured",
 	)
 }

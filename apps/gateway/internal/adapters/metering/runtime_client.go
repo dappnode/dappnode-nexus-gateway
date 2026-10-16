@@ -311,7 +311,7 @@ func validateRuntimeProof(proof runtimeProof, expectedAccountID, expectedProvide
 }
 
 func runtimeContractError(contract, reason string) *domain.GatewayError {
-	return meteringInternalError("contract", contract, "reason", reason)
+	return meteringInternalError("cause", domain.CauseMeteringBadResponse, "contract", contract, "reason", reason)
 }
 
 func jsonObject(raw json.RawMessage) bool {

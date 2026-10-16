@@ -7,7 +7,12 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /gateway ./apps/gateway
+# Release builds name themselves; logs and metrics carry these values.
+ARG VERSION=dev
+ARG COMMIT=
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w -X github.com/dappnode/dappnode-nexus-gateway/pkg/buildinfo.Version=${VERSION} -X github.com/dappnode/dappnode-nexus-gateway/pkg/buildinfo.Commit=${COMMIT}" \
+    -o /gateway ./apps/gateway
 
 # ---- Runtime stage ----
 FROM alpine:3.20

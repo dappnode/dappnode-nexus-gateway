@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -304,5 +305,29 @@ func TestSanitizeErrorWithPIIMapping_MasksKnownOriginalsInMessageAndMetadata(t *
 	if strings.Contains(sanitized.Message, "jane@example.com") || sanitized.Metadata["upstream_error"] != `bad request for [EMAIL_1]` ||
 		sanitized.Metadata["nested"].(map[string]any)["body"] != "[EMAIL_1]" {
 		t.Fatalf("not sanitized: %+v", sanitized)
+	}
+}
+
+// A failing PII analyzer is Nexus's fault, and the error says whether it
+// timed out, so the report can tell a slow analyzer from a broken one.
+func TestPII_FailureNamesItsCause(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"timeout": {err: fmt.Errorf("presidio: call analyzer: %w", context.DeadlineExceeded), want: domain.CausePIIFilterTimeout},
+		"failure": {err: io.ErrUnexpectedEOF, want: domain.CausePIIFilterFailed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := piiService(&fakePIIFilter{enabled: true, err: tc.err}, domain.APIKeyPIIModeHigh, &stubProvider{})
+			_, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(`{"messages":[{"role":"user","content":"hi"}]}`), domain.GenerateRequest{PublicModelID: "zai-org/glm-5.3-flash"}, "key")
+			gwErr, ok := err.(*domain.GatewayError)
+			if !ok || gwErr.Code != domain.ErrCodeInternalError {
+				t.Fatalf("error = %v", err)
+			}
+			if gwErr.Metadata["cause"] != tc.want || gwErr.Metadata["dependency"] != "pii" || domain.FaultOf(err) != domain.FaultNexus {
+				t.Fatalf("metadata = %v", gwErr.Metadata)
+			}
+		})
 	}
 }
