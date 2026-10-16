@@ -36,8 +36,11 @@ func TestDiagnosticFieldsKeepOnlyLogSafeMetadata(t *testing.T) {
 		"cause", CausePIIFilterTimeout,
 		"upstream_status", 503,
 		"upstream_code", strings.Repeat("x", 300),
+		"upstream_type", "the prompt said: my password is hunter2",
+		"requested_model", "deepseek/deepseek-v4-flash",
 		"upstream_error", "the prompt said: my password is hunter2",
 		"reason", "free text",
+		"contract", "Tinfoil proof",
 	)
 	got := map[string]any{}
 	fields := DiagnosticFields(err)
@@ -47,18 +50,32 @@ func TestDiagnosticFieldsKeepOnlyLogSafeMetadata(t *testing.T) {
 	for key, want := range map[string]any{
 		"fault": FaultNexus, "error_code": ErrCodeInternalError, "gateway_status": 500,
 		"dependency": "pii", "cause": CausePIIFilterTimeout, "upstream_status": 503,
+		// External values are logged only when they look like identifiers.
+		"upstream_code": RedactedValue, "upstream_type": RedactedValue,
+		"requested_model": "deepseek/deepseek-v4-flash",
+		// Values set by gateway code are logged as they are.
+		"contract": "Tinfoil proof",
 	} {
 		if got[key] != want {
 			t.Errorf("%s = %v, want %v", key, got[key], want)
 		}
 	}
-	if code, _ := got["upstream_code"].(string); len(code) != maxLogValue {
-		t.Errorf("upstream_code length = %d, want %d", len(code), maxLogValue)
-	}
 	for _, key := range []string{"upstream_error", "reason"} {
 		if _, ok := got[key]; ok {
 			t.Errorf("%s was logged", key)
 		}
+	}
+}
+
+// A fault in the metadata wins over the code: a provider_unavailable raised
+// by a Nexus dependency is Nexus's.
+func TestFaultOverride(t *testing.T) {
+	err := ErrProviderUnavailable("confidential replay protection").WithMeta("fault", FaultNexus)
+	if got := FaultOf(err); got != FaultNexus {
+		t.Fatalf("FaultOf = %q, want nexus", got)
+	}
+	if got := FaultOf(ErrProviderUnavailable("p").WithMeta("fault", "bogus")); got != FaultProvider {
+		t.Fatalf("an unknown override must be ignored, got %q", got)
 	}
 }
 

@@ -201,6 +201,14 @@ var (
 		[]string{"endpoint", "model", "provider", "phase", "fault", "error_code", "upstream_status"},
 	)
 
+	FallbacksTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "nexus_gateway_fallbacks_total",
+			Help: "Total switches to a model's fallback provider, by endpoint, model, primary provider, fallback provider and the primary's fault and error code.",
+		},
+		[]string{"endpoint", "model", "provider", "fallback_provider", "fault", "error_code"},
+	)
+
 	BuildInfo = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "nexus_gateway_build_info",
@@ -227,12 +235,22 @@ func RecordError(endpoint, model, provider, phase string, err error) {
 	if status := domain.UpstreamStatus(err); status > 0 {
 		upstream = strconv.Itoa(status)
 	}
-	code := domain.ErrCodeInternalError
+	ErrorsTotal.WithLabelValues(endpoint, model, provider, phase, domain.FaultOf(err), errorCode(err), upstream).Inc()
+}
+
+// RecordFallback counts a primary provider failure that the fallback
+// provider took over, which the error metric never sees when the fallback
+// succeeds.
+func RecordFallback(endpoint, model, provider, fallbackProvider string, err error) {
+	FallbacksTotal.WithLabelValues(endpoint, model, provider, fallbackProvider, domain.FaultOf(err), errorCode(err)).Inc()
+}
+
+func errorCode(err error) string {
 	var gwErr *domain.GatewayError
 	if errors.As(err, &gwErr) {
-		code = gwErr.Code
+		return gwErr.Code
 	}
-	ErrorsTotal.WithLabelValues(endpoint, model, provider, phase, domain.FaultOf(err), code, upstream).Inc()
+	return domain.ErrCodeInternalError
 }
 
 func init() {
@@ -256,6 +274,7 @@ func init() {
 		AttestationDuration,
 		ProviderRetries,
 		ErrorsTotal,
+		FallbacksTotal,
 		BuildInfo,
 	)
 	BuildInfo.WithLabelValues(buildinfo.Version, buildinfo.Commit).Set(1)

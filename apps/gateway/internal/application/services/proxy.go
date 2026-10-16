@@ -43,6 +43,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 
 	authCtx, err := s.auth.AuthenticateAPIKey(ctx, bearerToken)
 	if err != nil {
+		err = clientGone(ctx, err)
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
 		s.recordError(endpoint, req, nil, metrics.PhaseRequest, err)
 		return nil, err
@@ -53,7 +54,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		if model == nil {
 			return domain.Annotate(err, "account_id", authCtx.Account.ID, "requested_model", req.PublicModelID)
 		}
-		return domain.Annotate(err, "account_id", authCtx.Account.ID, "model", req.PublicModelID, "provider", model.ProviderConfig.ProviderName)
+		return domain.Annotate(err, "account_id", authCtx.Account.ID, "model", model.PublicModelID, "provider", model.ProviderConfig.ProviderName)
 	}
 	var model domain.PublicModel
 	execReq := req
@@ -63,6 +64,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		model, execReq, err = s.resolveModel(ctx, req)
 	}
 	if err != nil {
+		err = clientGone(ctx, err)
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
 		s.recordError(endpoint, req, nil, metrics.PhaseRequest, err)
 		return nil, reject(err, nil)
@@ -75,6 +77,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 	}
 	masked, mapping, err := s.maskBody(ctx, raw, authCtx.APIKey.PIIMode, endpoint)
 	if err != nil {
+		err = clientGone(ctx, err)
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
 		s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
@@ -82,6 +85,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 	}
 	reservationID, err := s.metering.Reserve(ctx, authCtx, endpoint, execReq, model, uuid.NewString())
 	if err != nil {
+		err = clientGone(ctx, err)
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
 		s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
 		return nil, reject(err, &model)
@@ -113,7 +117,10 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		}
 		provider, err := s.registry.GetProvider(target.ProviderConfig.ProviderName)
 		if err != nil {
-			return nil, domain.ErrProviderUnavailable(target.ProviderConfig.ProviderName)
+			// A provider name the catalog uses but this build doesn't know is
+			// Nexus's configuration, not the provider's outage.
+			return nil, domain.ErrProviderUnavailable(target.ProviderConfig.ProviderName).WithMeta(
+				"fault", domain.FaultNexus, "cause", domain.CauseProviderNotRegistered)
 		}
 		upstreamStart := time.Now()
 		if !execReq.Stream {
@@ -161,6 +168,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		withProviderTarget(model, *model.Fallback).SupportsEndpoint(endpoint) {
 		executed = withProviderTarget(model, *model.Fallback)
 		s.logFallback(requestID, model, executed, sanitizeErrorWithPIIMapping(err, mapping))
+		metrics.RecordFallback(endpoint, model.PublicModelID, model.ProviderConfig.ProviderName, executed.ProviderConfig.ProviderName, err)
 		call, err = attempt(executed)
 	}
 	if err != nil {

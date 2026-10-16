@@ -80,20 +80,20 @@ func (h *ConfidentialChatCompletionsHandler) Handle(w http.ResponseWriter, r *ht
 	w.Header().Set("Cache-Control", "no-store, no-transform")
 
 	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("confidential request body is required"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("confidential request body is required"))
 		return
 	}
 	encapsulatedKeys := r.Header.Values(protocol.EncapsulatedKeyHeader)
 	if len(encapsulatedKeys) == 0 {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("confidential endpoint requires an EHBP-encrypted body"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("confidential endpoint requires an EHBP-encrypted body"))
 		return
 	}
 	if len(encapsulatedKeys) != 1 || !isCanonicalEHBPKey(encapsulatedKeys[0]) {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("invalid EHBP encapsulated key header"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("invalid EHBP encapsulated key header"))
 		return
 	}
 	if r.ContentLength > confidentialMaxEHBPBody {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("encrypted request body exceeds the maximum size"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("encrypted request body exceeds the maximum size"))
 		return
 	}
 
@@ -118,47 +118,48 @@ func isCanonicalEHBPKey(encoded string) bool {
 func (h *ConfidentialChatCompletionsHandler) handleDecrypted(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, confidentialEnvelopeLimit+1))
 	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("failed to read confidential request"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("failed to read confidential request"))
 		return
 	}
 	if len(body) > confidentialEnvelopeLimit {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("confidential request body exceeds the maximum size"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("confidential request body exceeds the maximum size"))
 		return
 	}
 
 	envelope, err := decodeConfidentialEnvelope(body)
 	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField(err.Error()))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField(err.Error()))
 		return
 	}
 
 	now := h.now().UTC()
 	issuedAt, err := time.Parse(time.RFC3339, envelope.IssuedAt)
 	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("issued_at must be an RFC3339 timestamp"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("issued_at must be an RFC3339 timestamp"))
 		return
 	}
 	if issuedAt.Before(now.Add(-confidentialMaxAge)) {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("confidential request is stale"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("confidential request is stale"))
 		return
 	}
 	if issuedAt.After(now.Add(confidentialFutureSkew)) {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("confidential request timestamp is in the future"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("confidential request timestamp is in the future"))
 		return
 	}
 
 	parsedID, err := uuid.Parse(envelope.RequestID)
 	if err != nil || parsedID == uuid.Nil || parsedID.String() != envelope.RequestID {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("request_id must be a canonical UUID"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("request_id must be a canonical UUID"))
 		return
 	}
 
 	switch h.replays.checkAndStore(envelope.RequestID, now) {
 	case replayDuplicate:
-		WriteErrorWithLog(w, r, h.logger, domain.ErrConflict("confidential request was already processed"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrConflict("confidential request was already processed"))
 		return
 	case replayCapacityReached:
-		WriteErrorWithLog(w, r, h.logger, domain.ErrProviderUnavailable("confidential replay protection"))
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrProviderUnavailable("confidential replay protection").WithMeta(
+			"fault", domain.FaultNexus, "dependency", "replay_store", "cause", domain.CauseReplayStoreFull))
 		return
 	}
 

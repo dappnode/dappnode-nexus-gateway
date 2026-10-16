@@ -7,6 +7,7 @@ import (
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/dto"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
+	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
@@ -43,7 +44,7 @@ func WriteErrorWithLog(w http.ResponseWriter, r *http.Request, logger ports.Logg
 			"path", r.URL.Path,
 			"error_type", fmt.Sprintf("%T", err),
 		)
-		gwErr = domain.ErrInternal("an internal error occurred")
+		gwErr = domain.ErrInternal("an internal error occurred").WithMeta("cause", domain.CauseUntypedError)
 	}
 
 	// Log at warn for client errors, error for server errors. Provider errors
@@ -79,6 +80,14 @@ func errorDetail(err *domain.GatewayError) dto.ErrorDetail {
 		detail.UpstreamStatus = status
 	}
 	return detail
+}
+
+// rejectRequest answers a generation request that failed before reaching the
+// generation service (missing key, unreadable or invalid body), counting it
+// with the failures the service records itself.
+func rejectRequest(w http.ResponseWriter, r *http.Request, logger ports.Logger, endpoint string, err error) {
+	metrics.RecordError(endpoint, metrics.UnresolvedModel, "unknown", metrics.PhaseRequest, err)
+	WriteErrorWithLog(w, r, logger, err)
 }
 
 // ExtractBearerToken extracts the bearer token from the Authorization header.

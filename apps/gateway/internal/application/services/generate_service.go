@@ -268,13 +268,28 @@ func (s *GenerateService) recordError(endpoint string, req domain.GenerateReques
 	metrics.RecordError(endpoint, modelLabel, providerName, phase, err)
 }
 
-// metricLabels names the model and provider for metrics. A model that never
-// resolved is labeled as such: its name came from the caller.
+// metricLabels names the model and provider for metrics, by their catalog
+// names. A model that never resolved is labeled as such: its name came from
+// the caller.
 func metricLabels(req domain.GenerateRequest, model *domain.PublicModel) (string, string) {
 	if model == nil {
 		return metrics.UnresolvedModel, "unknown"
 	}
-	return req.PublicModelID, model.ProviderConfig.ProviderName
+	if model.PublicModelID == "" {
+		return req.PublicModelID, model.ProviderConfig.ProviderName
+	}
+	return model.PublicModelID, model.ProviderConfig.ProviderName
+}
+
+// clientGone reports a Nexus-side failure that happened after the client
+// left as the client's cancellation: the canceled dependency call is a
+// consequence, not a fault to fix. Caller and provider errors keep their
+// meaning.
+func clientGone(ctx context.Context, err error) error {
+	if err != nil && ctx.Err() != nil && domain.FaultOf(err) == domain.FaultNexus {
+		return domain.ErrClientCanceled()
+	}
+	return err
 }
 
 // buildErrorLogFields builds a structured log field slice for error conditions,

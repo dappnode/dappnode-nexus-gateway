@@ -22,17 +22,17 @@ func NewSystemOneHandler(service *services.GenerateService, logger ports.Logger)
 func (h *SystemOneHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	token, err := ExtractBearerToken(r)
 	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, err)
+		rejectRequest(w, r, h.logger, domain.EndpointSystemOne, err)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBodySize))
 	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, domain.ErrInvalidField("request body unreadable or too large"))
+		rejectRequest(w, r, h.logger, domain.EndpointSystemOne, domain.ErrInvalidField("request body unreadable or too large"))
 		return
 	}
 	req, err := mapper.SystemOneRequestToDomain(body)
 	if err != nil {
-		WriteErrorWithLog(w, r, h.logger, err)
+		rejectRequest(w, r, h.logger, domain.EndpointSystemOne, err)
 		return
 	}
 	call, err := h.service.Proxy(r.Context(), domain.EndpointSystemOne, body, req, token)

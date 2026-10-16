@@ -77,7 +77,7 @@ func (c *Client) Route(ctx context.Context, req domain.RouteRequest) (domain.Rou
 	if err != nil {
 		metrics.RouterRequests.WithLabelValues("transport_error").Inc()
 		metrics.RouterDuration.Observe(time.Since(start).Seconds())
-		return domain.RouteDecision{}, routerInternalError("reason", err.Error())
+		return domain.RouteDecision{}, routerInternalError("cause", domain.CauseRouterUnreachable, "reason", err.Error())
 	}
 	defer resp.Body.Close()
 
@@ -88,14 +88,14 @@ func (c *Client) Route(ctx context.Context, req domain.RouteRequest) (domain.Rou
 		if decodeErr := json.NewDecoder(resp.Body).Decode(&errResp); decodeErr == nil && errResp.Error.Code != "" {
 			return domain.RouteDecision{}, mapRouterError(req.RouterID, resp.StatusCode, errResp)
 		}
-		return domain.RouteDecision{}, routerInternalError("router_status", resp.StatusCode)
+		return domain.RouteDecision{}, routerInternalError("cause", domain.CauseRouterErrorStatus, "router_status", resp.StatusCode)
 	}
 
 	var out routeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		metrics.RouterRequests.WithLabelValues("protocol_error").Inc()
 		metrics.RouterDuration.Observe(time.Since(start).Seconds())
-		return domain.RouteDecision{}, routerInternalError("reason", err.Error())
+		return domain.RouteDecision{}, routerInternalError("cause", domain.CauseRouterBadResponse, "reason", err.Error())
 	}
 
 	metrics.RouterRequests.WithLabelValues("success").Inc()
@@ -124,6 +124,7 @@ func mapRouterError(routerID string, status int, errResp errorResponse) error {
 		return domain.ErrInvalidField(errResp.Error.Message)
 	default:
 		return routerInternalError(
+			"cause", domain.CauseRouterErrorStatus,
 			"router_status", status,
 			"router_code", errResp.Error.Code,
 			"reason", errResp.Error.Message,

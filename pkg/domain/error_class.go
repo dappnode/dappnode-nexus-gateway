@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -14,15 +15,24 @@ const (
 	FaultUnclear  = "unclear"  // A provider refused the request: a bad request or a Nexus compatibility gap.
 )
 
-// Error causes for internal errors. A cause is a fixed value, never text from
-// a request or a dependency, so it is always safe to log.
+// Error causes. A cause is a fixed value, never text from a request or a
+// dependency, so it is always safe to log.
 const (
-	CausePIIFilterTimeout   = "pii_filter_timeout"
-	CausePIIFilterFailed    = "pii_filter_failed"
-	CauseProviderKeyMissing = "provider_key_missing"
-	CauseCreditHoldLost     = "credit_hold_lost"
-	CauseRouterMissing      = "router_not_configured"
-	CauseRouterEmptyModel   = "router_empty_model"
+	CausePIIFilterTimeout      = "pii_filter_timeout"
+	CausePIIFilterFailed       = "pii_filter_failed"
+	CauseProviderKeyMissing    = "provider_key_missing"
+	CauseProviderNotRegistered = "provider_not_registered"
+	CauseCreditHoldLost        = "credit_hold_lost"
+	CauseMeteringUnreachable   = "metering_unreachable"
+	CauseMeteringErrorStatus   = "metering_error_status"
+	CauseMeteringBadResponse   = "metering_bad_response"
+	CauseRouterMissing         = "router_not_configured"
+	CauseRouterEmptyModel      = "router_empty_model"
+	CauseRouterUnreachable     = "router_unreachable"
+	CauseRouterErrorStatus     = "router_error_status"
+	CauseRouterBadResponse     = "router_bad_response"
+	CauseReplayStoreFull       = "replay_store_full"
+	CauseUntypedError          = "untyped_error"
 )
 
 var faultByCode = map[string]string{
@@ -39,6 +49,10 @@ var faultByCode = map[string]string{
 	ErrCodeUnknownField:            FaultCaller,
 	ErrCodeInsufficientBalance:     FaultCaller,
 	ErrCodeClientCanceled:          FaultCaller,
+	ErrCodeNotFound:                FaultCaller,
+	ErrCodeForbidden:               FaultCaller,
+	ErrCodeConflict:                FaultCaller,
+	ErrCodeAlreadyExists:           FaultCaller,
 	ErrCodeProviderRateLimited:     FaultProvider,
 	ErrCodeProviderUnavailable:     FaultProvider,
 	ErrCodeProviderTimeout:         FaultProvider,
@@ -48,12 +62,18 @@ var faultByCode = map[string]string{
 	ErrCodeInternalError:           FaultNexus,
 }
 
-// FaultOf classifies an error. Errors that are not GatewayErrors reach the
-// client as internal errors, so they are Nexus's.
+// FaultOf classifies an error. A "fault" in the metadata wins over the code,
+// for codes that name a different party than the one at fault (a
+// provider_unavailable raised by a Nexus dependency). Errors that are not
+// GatewayErrors reach the client as internal errors, so they are Nexus's.
 func FaultOf(err error) string {
 	var gwErr *GatewayError
 	if !errors.As(err, &gwErr) {
 		return FaultNexus
+	}
+	switch fault, _ := gwErr.Metadata["fault"].(string); fault {
+	case FaultCaller, FaultProvider, FaultNexus, FaultUnclear:
+		return fault
 	}
 	if fault, ok := faultByCode[gwErr.Code]; ok {
 		return fault
@@ -64,16 +84,24 @@ func FaultOf(err error) string {
 // maxLogValue bounds a logged diagnostic string.
 const maxLogValue = 128
 
-// logSafeMeta lists metadata that is safe to log: fixed vocabularies, numeric
-// statuses and provider error codes. Messages, reasons and anything that can
-// echo request content stay out of logs.
-var logSafeMeta = []string{
-	"dependency", "cause", "contract",
-	"metering_status", "metering_code",
-	"router_status", "router_code",
-	"upstream_status", "upstream_type", "upstream_code",
-	"compatibility_note", "retry_reason", "attempt",
-	"account_id", "model", "provider", "requested_model",
+// RedactedValue replaces an external value that is not identifier-shaped.
+const RedactedValue = "[redacted]"
+
+// logSafeMeta lists metadata that is safe to log. Messages, reasons and
+// anything that can echo request content stay out of logs.
+var logSafeMeta = []struct {
+	key string
+	// external values come from callers, providers or other services and are
+	// logged only when they look like identifiers; the others are set by
+	// gateway code.
+	external bool
+}{
+	{"dependency", false}, {"cause", false}, {"contract", false},
+	{"metering_status", false}, {"metering_code", true},
+	{"router_status", false}, {"router_code", true},
+	{"upstream_status", false}, {"upstream_type", true}, {"upstream_code", true},
+	{"compatibility_note", false}, {"retry_reason", false}, {"attempt", false},
+	{"account_id", true}, {"model", true}, {"provider", true}, {"requested_model", true},
 }
 
 // DiagnosticFields returns the error's classification and its log-safe
@@ -85,17 +113,39 @@ func DiagnosticFields(err error) []any {
 		return fields
 	}
 	fields = append(fields, "error_code", gwErr.Code, "gateway_status", gwErr.HTTPStatus)
-	for _, key := range logSafeMeta {
-		switch value := gwErr.Metadata[key].(type) {
+	for _, meta := range logSafeMeta {
+		switch value := gwErr.Metadata[meta.key].(type) {
 		case int, int64:
-			fields = append(fields, key, value)
+			fields = append(fields, meta.key, value)
 		case string:
-			if value != "" {
-				fields = append(fields, key, truncate(value, maxLogValue))
+			if value == "" {
+				continue
 			}
+			if meta.external && !isIdentifier(value) {
+				value = RedactedValue
+			}
+			fields = append(fields, meta.key, truncate(value, maxLogValue))
 		}
 	}
 	return fields
+}
+
+// isIdentifier reports whether s looks like a code, a model ID or an account
+// ID rather than free text: short, with no spaces or punctuation beyond
+// what identifiers use.
+func isIdentifier(s string) bool {
+	if len(s) > maxLogValue {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("-_./:@+", r):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // UpstreamStatus returns the provider's HTTP status, or 0 when there was none.
