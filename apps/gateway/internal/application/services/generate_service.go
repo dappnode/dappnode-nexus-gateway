@@ -26,6 +26,8 @@ type GenerateService struct {
 	piiFailOpen   bool
 	tinfoilProofs ports.TinfoilTransportProofRepository
 	logger        ports.Logger
+	heal          SelfHealing
+	breaker       *breaker
 }
 
 func NewGenerateService(
@@ -46,7 +48,15 @@ func NewGenerateService(
 		pii:      pii,
 		piiLang:  "en",
 		logger:   logger,
+		heal:     DefaultSelfHealing,
+		breaker:  newBreaker(DefaultSelfHealing),
 	}
+}
+
+// SetSelfHealing configures the provider circuit breaker and quick retries.
+func (s *GenerateService) SetSelfHealing(cfg SelfHealing) {
+	s.heal = cfg
+	s.breaker = newBreaker(cfg)
 }
 
 // SetPIIOptions configures the PII filter language and failure mode.

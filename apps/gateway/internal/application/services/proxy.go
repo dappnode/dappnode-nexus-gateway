@@ -162,14 +162,32 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		return &ProxyCall{Model: target, Stream: stream}, nil
 	}
 
-	call, err := attempt(model)
+	// The model's provider first, then its fallback if the first one failed
+	// on the provider's side. A provider whose circuit is open is skipped at
+	// once, so a dead provider costs callers nothing when a fallback exists.
+	targets := []domain.PublicModel{model}
+	if model.Fallback != nil {
+		if fallback := withProviderTarget(model, *model.Fallback); fallback.SupportsEndpoint(endpoint) {
+			targets = append(targets, fallback)
+		}
+	}
+	var call *ProxyCall
 	executed := model
-	if err != nil && shouldTryFallback(ctx, err, model.Fallback) &&
-		withProviderTarget(model, *model.Fallback).SupportsEndpoint(endpoint) {
-		executed = withProviderTarget(model, *model.Fallback)
-		s.logFallback(requestID, model, executed, sanitizeErrorWithPIIMapping(err, mapping))
-		metrics.RecordFallback(endpoint, model.PublicModelID, model.ProviderConfig.ProviderName, executed.ProviderConfig.ProviderName, err)
-		call, err = attempt(executed)
+	for i, target := range targets {
+		if i > 0 {
+			if !shouldTryFallback(ctx, err, model.Fallback) {
+				break
+			}
+			s.logFallback(requestID, executed, target, sanitizeErrorWithPIIMapping(err, mapping))
+			metrics.RecordFallback(endpoint, model.PublicModelID, executed.ProviderConfig.ProviderName, target.ProviderConfig.ProviderName, err)
+		}
+		executed = target
+		// At most two provider attempts per request: the provider and its
+		// fallback, or, with no fallback, the provider and one quick retry.
+		call, err = s.tryTarget(ctx, requestID, target, attempt, len(targets) == 1)
+		if err == nil {
+			break
+		}
 	}
 	if err != nil {
 		defer stopLease()
