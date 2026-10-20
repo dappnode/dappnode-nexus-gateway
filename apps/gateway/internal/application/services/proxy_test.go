@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -168,6 +169,66 @@ func TestProxyStream_ClientLeaving(t *testing.T) {
 			}
 			if name == "after finish" && (meter.successCalls != 1 || meter.result.Usage == nil) {
 				t.Fatal("finished stream not billed")
+			}
+		})
+	}
+}
+
+// cutStream serves content, then fails the read the way a cut upstream does.
+type cutStream struct {
+	content io.Reader
+	err     error
+}
+
+func (c *cutStream) Read(p []byte) (int, error) {
+	n, err := c.content.Read(p)
+	if err == io.EOF {
+		return n, c.err
+	}
+	return n, err
+}
+
+func (c *cutStream) Close() error { return nil }
+
+// A read that breaks mid-answer is the caller's cancellation when the
+// request context is already canceled (the caller hung up and the gateway
+// cut the upstream), and the provider's failure only while it is alive.
+func TestProxyStream_ReadErrorIsClassifiedByWhoLeft(t *testing.T) {
+	first := "data: {\"choices\":[{\"delta\":{\"content\":\"par\"}}]}\n\n"
+	for name, tc := range map[string]struct {
+		hungUp bool
+		fault  string
+		code   string
+	}{
+		"caller hung up": {hungUp: true, fault: domain.FaultCaller, code: domain.ErrCodeClientCanceled},
+		"provider cut":   {hungUp: false, fault: domain.FaultProvider, code: domain.ErrCodeProviderError},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			meter := &resultMeter{}
+			primary := &proxyStub{body: &cutStream{content: strings.NewReader(first), err: errors.New("connection reset")}}
+			svc := proxyService(meter, "", map[string]ports.Provider{"primary": primary}, false)
+			call, err := svc.Proxy(ctx, domain.EndpointChatCompletions, []byte(`{}`), streamRequest(), "key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.hungUp {
+				cancel()
+			}
+			if _, err := relayAll(t, call.Stream); err == nil {
+				t.Fatal("read error not reported")
+			}
+			call.Stream.Close()
+			var gwErr *domain.GatewayError
+			if meter.failed == nil || !errors.As(meter.failed, &gwErr) {
+				t.Fatalf("failure not metered: %v", meter.failed)
+			}
+			if domain.FaultOf(meter.failed) != tc.fault || gwErr.Code != tc.code {
+				t.Fatalf("failure = %s/%d %s, want %s", domain.FaultOf(meter.failed), gwErr.HTTPStatus, gwErr.Code, tc.fault)
+			}
+			if tc.hungUp && meter.successCalls != 0 {
+				t.Fatalf("abandoned stream billed as success")
 			}
 		})
 	}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http/httptest"
@@ -46,7 +47,7 @@ func TestRelay_EndsEveryStream(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			handler := &ChatCompletionsHandler{logger: &confidentialTestLogger{}}
 			var finished atomic.Bool
-			handler.relay(recorder, httptest.NewRequest("POST", "/v1/chat/completions", nil), services.NewProxyStream(brokenBody{tc.body}, "m"), &finished)
+			handler.relay(recorder, httptest.NewRequest("POST", "/v1/chat/completions", nil), services.NewProxyStream(context.Background(), brokenBody{tc.body}, "m"), &finished)
 			body := recorder.Body.String()
 			for _, want := range tc.want {
 				if !strings.Contains(body, want) {

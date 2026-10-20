@@ -148,7 +148,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		if err != nil {
 			return nil, err
 		}
-		stream := newProxyStream(resp.Body, target.PublicModelID)
+		stream := newProxyStream(ctx, resp.Body, target.PublicModelID)
 		stream.proof = resp.Proof
 		stream.hideUsage = !wantsUsage(raw)
 		stream.unmask = unmask(target)
@@ -377,6 +377,9 @@ func observeJSON(body []byte, public string, unmask *unmasker) ([]byte, outcome,
 // the finish reason as they pass. Lines are forwarded exactly, except the
 // model field of JSON events.
 type ProxyStream struct {
+	// ctx is the request's context. A read that fails once it is canceled
+	// means the gateway cut the upstream, not that the provider failed.
+	ctx     context.Context
 	body    io.ReadCloser
 	scanner *bufio.Scanner
 	public  string
@@ -411,16 +414,17 @@ func wantsUsage(raw []byte) bool {
 	return json.Unmarshal(raw, &req) == nil && req.StreamOptions != nil && req.StreamOptions.IncludeUsage
 }
 
-// NewProxyStream relays body, naming the public model. The service creates
-// streams; it is exported for handler tests.
-func NewProxyStream(body io.ReadCloser, public string) *ProxyStream {
-	return newProxyStream(body, public)
+// NewProxyStream relays body, naming the public model on the request's
+// context, which tells a caller hang-up from a provider cut. The service
+// creates streams; it is exported for handler tests.
+func NewProxyStream(ctx context.Context, body io.ReadCloser, public string) *ProxyStream {
+	return newProxyStream(ctx, body, public)
 }
 
-func newProxyStream(body io.ReadCloser, public string) *ProxyStream {
+func newProxyStream(ctx context.Context, body io.ReadCloser, public string) *ProxyStream {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxSSELine)
-	return &ProxyStream{body: body, scanner: scanner, public: public}
+	return &ProxyStream{ctx: ctx, body: body, scanner: scanner, public: public}
 }
 
 // prime reads until the first output, so an upstream that fails first can
@@ -596,6 +600,11 @@ func (p *ProxyStream) Next() ([]byte, error) {
 		p.end("eof_without_finish")
 	case p.o.finish != nil:
 		p.end("read_error_after_finish") // Complete; only trailing bytes were lost.
+	case p.ctx != nil && p.ctx.Err() != nil:
+		// The caller hung up, so the gateway cut the upstream read: the
+		// caller's cancellation, not a provider that failed.
+		p.o.err = domain.ErrClientCanceled()
+		p.end("client_gone")
 	default:
 		p.o.err = domain.ErrProviderError(http.StatusBadGateway, "provider stream failed")
 		p.end("read_error")
