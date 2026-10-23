@@ -263,3 +263,22 @@ func assertInternalMeteringError(t *testing.T, err error) {
 		t.Fatalf("metadata = %#v, want metering dependency", gatewayErr.Metadata)
 	}
 }
+
+func TestClientReserve_MapsDailyTokenLimitWithoutRetry(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"type":"rate_limit_error","code":"daily_token_limit_exceeded","message":"Daily token quota reached"}}`))
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "token", time.Second)
+	_, err := client.Reserve(context.Background(), testAuth(), domain.EndpointChatCompletions, domain.GenerateRequest{PublicModelID: "model"}, testModel(), "gw-limit")
+	var gatewayErr *domain.GatewayError
+	if !errors.As(err, &gatewayErr) || gatewayErr.HTTPStatus != 429 || gatewayErr.Type != domain.ErrTypeRateLimit || gatewayErr.Code != domain.ErrCodeDailyTokenLimit {
+		t.Fatalf("got %#v, want daily quota 429", err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("quota error retried %d times", attempts.Load())
+	}
+}
