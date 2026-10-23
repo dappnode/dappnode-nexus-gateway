@@ -11,6 +11,7 @@ const (
 	ErrTypePermission     = "permission_error"
 	ErrTypeProvider       = "provider_error"
 	ErrTypeInternal       = "internal_error"
+	ErrTypeRateLimit      = "rate_limit_error"
 )
 
 // Error codes as defined in the spec.
@@ -33,6 +34,7 @@ const (
 	ErrCodeInvalidField            = "invalid_field"
 	ErrCodeUnknownField            = "unknown_field"
 	ErrCodeInsufficientBalance     = "insufficient_balance"
+	ErrCodeDailyTokenLimit         = "daily_token_limit_exceeded"
 	ErrCodeClientCanceled          = "client_canceled"
 	ErrCodeInternalError           = "internal_error"
 )
