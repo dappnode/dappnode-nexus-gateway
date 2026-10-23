@@ -94,7 +94,9 @@ func (h *ChatCompletionsHandler) relay(w http.ResponseWriter, r *http.Request, s
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		lastWrite = time.Now()
-		// A client that left keeps the loop draining the upstream for usage.
+		// A client that left fails the write; its canceled request context
+		// ends the upstream read on the next line, so there is nothing to do
+		// here.
 		_ = sw.WriteLine(line)
 	}
 	stopKeepAlive := make(chan struct{})

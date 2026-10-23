@@ -139,8 +139,9 @@ func (s *stubProviderRegistry) GetProvider(name string) (ports.Provider, error) 
 type stubProvider struct {
 	beforeReturn func()
 	err          error
-	json         string // Complete's body; a short answer when empty.
-	sse          string // Stream's body.
+	json         string        // Complete's body; a short answer when empty.
+	sse          string        // Stream's body.
+	body         io.ReadCloser // Stream's body when it has to fail mid-read.
 	calls        int
 	lastRaw      string
 }
@@ -167,6 +168,9 @@ func (s *stubProvider) Stream(_ context.Context, raw []byte, _ domain.PublicMode
 	s.lastRaw = string(raw)
 	if s.err != nil {
 		return ports.ProviderStream{}, s.err
+	}
+	if s.body != nil {
+		return ports.ProviderStream{Body: s.body}, nil
 	}
 	return ports.ProviderStream{Body: io.NopCloser(strings.NewReader(s.sse))}, nil
 }
