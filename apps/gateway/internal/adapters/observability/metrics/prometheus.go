@@ -209,6 +209,22 @@ var (
 		[]string{"endpoint", "model", "provider", "fallback_provider", "fault", "error_code"},
 	)
 
+	CircuitOpen = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "nexus_gateway_circuit_open",
+			Help: "1 while the gateway has stopped sending to a provider target that kept failing, by provider and upstream model.",
+		},
+		[]string{"provider", "provider_model"},
+	)
+
+	CircuitTransitions = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "nexus_gateway_circuit_transitions_total",
+			Help: "Total provider circuit state changes, by provider, upstream model and new state (open|closed).",
+		},
+		[]string{"provider", "provider_model", "state"},
+	)
+
 	BuildInfo = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "nexus_gateway_build_info",
@@ -275,6 +291,8 @@ func init() {
 		ProviderRetries,
 		ErrorsTotal,
 		FallbacksTotal,
+		CircuitOpen,
+		CircuitTransitions,
 		BuildInfo,
 	)
 	BuildInfo.WithLabelValues(buildinfo.Version, buildinfo.Commit).Set(1)
