@@ -126,6 +126,7 @@ func main() {
 		attestationHandler = handlers.NewAttestationHandler(attester, hpkePublicKey, zapLogger)
 		confidentialChatHandler, err = handlers.NewConfidentialChatCompletionsHandler(
 			ehbpIdentity,
+			authService,
 			http.HandlerFunc(chatHandler.Handle),
 			zapLogger,
 		)
@@ -152,7 +153,11 @@ func main() {
 	go func() {
 		metricsAddr := envOr("METRICS_PORT", "9090")
 		zapLogger.Info("metrics server starting", "port", metricsAddr)
-		if err := http.ListenAndServe(":"+metricsAddr, metricsMux); err != nil {
+		metricsBind := ":" + metricsAddr
+		if profile.Enabled {
+			metricsBind = "127.0.0.1:" + metricsAddr
+		}
+		if err := http.ListenAndServe(metricsBind, metricsMux); err != nil {
 			zapLogger.Error("metrics server error", "error", err)
 		}
 	}()

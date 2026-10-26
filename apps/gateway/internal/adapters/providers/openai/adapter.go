@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -44,7 +45,14 @@ func missingProviderCredentialError(providerName string) *domain.GatewayError {
 	)
 }
 
-func resolveAPIKey(secretRef string) string {
+var providerSecretRef = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,119}_API_KEY$`)
+
+// ResolveAPIKey restricts catalog references to provider credentials, excluding
+// internal secrets such as METERING_TOKEN.
+func ResolveAPIKey(secretRef string) string {
+	if !providerSecretRef.MatchString(secretRef) {
+		return ""
+	}
 	return os.Getenv(secretRef)
 }
 

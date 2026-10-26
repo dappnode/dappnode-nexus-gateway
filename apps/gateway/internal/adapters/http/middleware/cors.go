@@ -17,7 +17,6 @@ func CORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Ehbp-Encapsulated-Key, X-Request-ID")
 		w.Header().Set("Access-Control-Expose-Headers", "Ehbp-Response-Nonce, X-Request-ID")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Max-Age", "86400")
 
 		if r.Method == http.MethodOptions {

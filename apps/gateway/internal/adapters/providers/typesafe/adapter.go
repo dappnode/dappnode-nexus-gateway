@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/openai"
@@ -18,7 +17,7 @@ type Adapter struct{ client *openai.Client }
 func NewAdapter(timeout time.Duration) *Adapter { return &Adapter{client: openai.NewClient(timeout)} }
 
 func (a *Adapter) Complete(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
-	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
+	apiKey := openai.ResolveAPIKey(model.ProviderConfig.APIKeySecretRef)
 	if apiKey == "" {
 		return nil, nil, domain.ErrInternal("an internal error occurred").WithMeta(
 			"provider", "typesafe",

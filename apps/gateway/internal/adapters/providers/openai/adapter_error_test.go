@@ -41,3 +41,17 @@ func assertInternalCredentialError(t *testing.T, err error, provider string) {
 		t.Fatalf("error = %#v, want generic response with provider log metadata", gatewayErr)
 	}
 }
+
+func TestResolveAPIKeyRejectsInternalSecrets(t *testing.T) {
+	t.Setenv("METERING_TOKEN", "internal-secret")
+	t.Setenv("TEST_API_KEY", "provider-secret")
+	t.Setenv("invalid_API_KEY", "invalid-name-secret")
+	if got := ResolveAPIKey("TEST_API_KEY"); got != "provider-secret" {
+		t.Fatal("provider credential was not resolved")
+	}
+	for _, ref := range []string{"", "METERING_TOKEN", "invalid_API_KEY", "MISSING_API_KEY"} {
+		if got := ResolveAPIKey(ref); got != "" {
+			t.Fatalf("disallowed or missing reference %q resolved", ref)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"container/list"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -19,14 +20,15 @@ import (
 )
 
 const (
-	confidentialEnvelopeSchema = 1
-	confidentialEnvelopeLimit  = maxRequestBodySize + 64*1024
-	confidentialMaxAge         = 2 * time.Minute
-	confidentialFutureSkew     = 30 * time.Second
-	confidentialReplayTTL      = 3 * time.Minute
-	confidentialReplayCapacity = 100_000
-	confidentialMaxEHBPFrame   = 1*1024*1024 + 16
-	confidentialMaxEHBPBody    = 16 * 1024 * 1024
+	confidentialEnvelopeSchema        = 1
+	confidentialEnvelopeLimit         = maxRequestBodySize + 64*1024
+	confidentialMaxAge                = 2 * time.Minute
+	confidentialFutureSkew            = 30 * time.Second
+	confidentialReplayTTL             = 3 * time.Minute
+	confidentialReplayCapacity        = 100_000
+	confidentialReplayAccountCapacity = 10_000
+	confidentialMaxEHBPFrame          = 1*1024*1024 + 16
+	confidentialMaxEHBPBody           = 16 * 1024 * 1024
 )
 
 // ConfidentialChatCompletionsHandler is the strict EHBP-only wrapper around
@@ -36,6 +38,7 @@ const (
 type ConfidentialChatCompletionsHandler struct {
 	encrypted http.Handler
 	next      http.Handler
+	auth      ports.AuthService
 	logger    ports.Logger
 	replays   *confidentialReplayCache
 	now       func() time.Time
@@ -53,11 +56,15 @@ type confidentialEnvelope struct {
 // the enclave; a public-only identity is intentionally rejected.
 func NewConfidentialChatCompletionsHandler(
 	serverIdentity *identity.Identity,
+	auth ports.AuthService,
 	next http.Handler,
 	logger ports.Logger,
 ) (*ConfidentialChatCompletionsHandler, error) {
 	if serverIdentity == nil || serverIdentity.PrivateKey() == nil {
 		return nil, errors.New("confidential handler requires a private EHBP identity")
+	}
+	if auth == nil {
+		return nil, errors.New("confidential handler requires authentication")
 	}
 	if next == nil {
 		return nil, errors.New("confidential handler requires a downstream handler")
@@ -65,6 +72,7 @@ func NewConfidentialChatCompletionsHandler(
 
 	h := &ConfidentialChatCompletionsHandler{
 		next:    next,
+		auth:    auth,
 		logger:  logger,
 		replays: newConfidentialReplayCache(confidentialReplayTTL, confidentialReplayCapacity),
 		now:     time.Now,
@@ -116,6 +124,21 @@ func isCanonicalEHBPKey(encoded string) bool {
 // handleDecrypted executes only after the EHBP middleware authenticates the
 // first encrypted frame and installs response encryption.
 func (h *ConfidentialChatCompletionsHandler) handleDecrypted(w http.ResponseWriter, r *http.Request) {
+	token, err := ExtractBearerToken(r)
+	if err != nil {
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, err)
+		return
+	}
+	auth, err := h.auth.AuthenticateAPIKey(r.Context(), token)
+	if err != nil {
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, err)
+		return
+	}
+	if auth.Account.ID == "" {
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInternal("authentication returned no account"))
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, confidentialEnvelopeLimit+1))
 	if err != nil {
 		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("failed to read confidential request"))
@@ -132,7 +155,7 @@ func (h *ConfidentialChatCompletionsHandler) handleDecrypted(w http.ResponseWrit
 		return
 	}
 
-	now := h.now().UTC()
+	now := h.now()
 	issuedAt, err := time.Parse(time.RFC3339, envelope.IssuedAt)
 	if err != nil {
 		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrInvalidField("issued_at must be an RFC3339 timestamp"))
@@ -153,9 +176,15 @@ func (h *ConfidentialChatCompletionsHandler) handleDecrypted(w http.ResponseWrit
 		return
 	}
 
-	switch h.replays.checkAndStore(envelope.RequestID, now) {
+	switch h.replays.checkAndStore(auth.Account.ID, envelope.RequestID, h.now) {
 	case replayDuplicate:
 		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrConflict("confidential request was already processed"))
+		return
+	case replayAccountCapacityReached:
+		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, &domain.GatewayError{
+			HTTPStatus: http.StatusTooManyRequests, Type: domain.ErrTypeRateLimit,
+			Code: domain.ErrCodeConfidentialLimit, Message: "Account confidential request limit reached; retry after replay entries expire",
+		})
 		return
 	case replayCapacityReached:
 		rejectRequest(w, r, h.logger, domain.EndpointChatCompletions, domain.ErrProviderUnavailable("confidential replay protection").WithMeta(
@@ -163,8 +192,8 @@ func (h *ConfidentialChatCompletionsHandler) handleDecrypted(w http.ResponseWrit
 		return
 	}
 
-	// The existing handler remains the single implementation of bearer auth,
-	// OpenAI request validation, generation, and streaming. Only replace the
+	// The downstream handler rechecks authentication and remains responsible for
+	// OpenAI validation, generation, and streaming. Only replace the
 	// decrypted envelope with its exact nested OpenAI request object.
 	r.Body = io.NopCloser(bytes.NewReader(envelope.Request))
 	r.ContentLength = int64(len(envelope.Request))
@@ -201,46 +230,64 @@ const (
 	replayAccepted replayResult = iota
 	replayDuplicate
 	replayCapacityReached
+	replayAccountCapacityReached
 )
 
+type confidentialReplayKey struct{ accountID, requestID string }
+type confidentialReplayEntry struct {
+	key       confidentialReplayKey
+	expiresAt time.Time
+}
+
 type confidentialReplayCache struct {
-	mu       sync.Mutex
-	ttl      time.Duration
-	capacity int
-	entries  map[string]time.Time
-	nextGC   time.Time
+	// ponytail: one lock for a bounded cache; shard by account if contention is measured.
+	mu              sync.Mutex
+	ttl             time.Duration
+	capacity        int
+	accountCapacity int
+	entries         map[confidentialReplayKey]struct{}
+	accounts        map[string]int
+	expirations     *list.List
 }
 
 func newConfidentialReplayCache(ttl time.Duration, capacity int) *confidentialReplayCache {
 	return &confidentialReplayCache{
-		ttl:      ttl,
-		capacity: capacity,
-		entries:  make(map[string]time.Time),
+		ttl: ttl, capacity: capacity, accountCapacity: min(capacity, confidentialReplayAccountCapacity),
+		entries: make(map[confidentialReplayKey]struct{}), accounts: make(map[string]int), expirations: list.New(),
 	}
 }
 
-func (c *confidentialReplayCache) checkAndStore(requestID string, now time.Time) replayResult {
+func (c *confidentialReplayCache) checkAndStore(accountID, requestID string, clock func() time.Time) replayResult {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if expiresAt, ok := c.entries[requestID]; ok && now.Before(expiresAt) {
+	now := clock() // Sample under the lock so expiry order follows insertion order.
+	// Fixed TTLs preserve insertion order. Remove only expired entries, never
+	// live replay protection; full-cache rejection does not scan the map.
+	for front := c.expirations.Front(); front != nil; front = c.expirations.Front() {
+		entry := front.Value.(confidentialReplayEntry)
+		if now.Before(entry.expiresAt) {
+			break
+		}
+		delete(c.entries, entry.key)
+		c.accounts[entry.key.accountID]--
+		if c.accounts[entry.key.accountID] == 0 {
+			delete(c.accounts, entry.key.accountID)
+		}
+		c.expirations.Remove(front)
+	}
+	key := confidentialReplayKey{accountID: accountID, requestID: requestID}
+	if _, ok := c.entries[key]; ok {
 		return replayDuplicate
 	}
-
-	if c.nextGC.IsZero() || !now.Before(c.nextGC) || len(c.entries) >= c.capacity {
-		// Freshness validation happens before this call, so an entry can safely
-		// expire after the maximum request age.
-		for id, expiresAt := range c.entries {
-			if !now.Before(expiresAt) {
-				delete(c.entries, id)
-			}
-		}
-		c.nextGC = now.Add(time.Minute)
+	if c.accounts[accountID] >= c.accountCapacity {
+		return replayAccountCapacityReached
 	}
 	if len(c.entries) >= c.capacity {
 		return replayCapacityReached
 	}
-	c.entries[requestID] = now.Add(c.ttl)
+	c.entries[key] = struct{}{}
+	c.accounts[accountID]++
+	c.expirations.PushBack(confidentialReplayEntry{key: key, expiresAt: now.Add(c.ttl)})
 	return replayAccepted
 }
 

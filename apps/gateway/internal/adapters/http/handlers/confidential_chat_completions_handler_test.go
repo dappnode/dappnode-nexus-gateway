@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
+	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 	"github.com/google/uuid"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
@@ -345,7 +347,7 @@ func TestConfidentialChatCompletionsHandler_RejectsTamperingAndStaleKey(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewConfidentialChatCompletionsHandler(serverIdentity, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handler, err := NewConfidentialChatCompletionsHandler(serverIdentity, confidentialTestAuth{}, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("stale-key request reached downstream")
 	}), &confidentialTestLogger{})
 	if err != nil {
@@ -381,7 +383,7 @@ func TestNewConfidentialChatCompletionsHandler_RequiresPrivateIdentity(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewConfidentialChatCompletionsHandler(publicOnly, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), &confidentialTestLogger{}); err == nil {
+	if _, err := NewConfidentialChatCompletionsHandler(publicOnly, confidentialTestAuth{}, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), &confidentialTestLogger{}); err == nil {
 		t.Fatal("public-only identity was accepted")
 	}
 }
@@ -392,7 +394,7 @@ func newConfidentialTestHandler(t *testing.T, next http.Handler) (*ConfidentialC
 	if err != nil {
 		t.Fatalf("generate server identity: %v", err)
 	}
-	handler, err := NewConfidentialChatCompletionsHandler(serverIdentity, next, &confidentialTestLogger{})
+	handler, err := NewConfidentialChatCompletionsHandler(serverIdentity, confidentialTestAuth{}, next, &confidentialTestLogger{})
 	if err != nil {
 		t.Fatalf("create confidential handler: %v", err)
 	}
@@ -451,4 +453,104 @@ func envelopeAt(issuedAt time.Time, requestID string, request json.RawMessage) [
 		panic(err)
 	}
 	return body
+}
+
+// Test credentials model two keys owned by one account and a second account.
+type confidentialTestAuth struct{}
+
+func (confidentialTestAuth) AuthenticateAPIKey(_ context.Context, key string) (domain.AuthContext, error) {
+	switch key {
+	case "nexus-test-key", "nexus-rotated-key":
+		return domain.AuthContext{Account: domain.Account{ID: "account-a"}}, nil
+	case "nexus-other-key":
+		return domain.AuthContext{Account: domain.Account{ID: "account-b"}}, nil
+	case "unavailable":
+		return domain.AuthContext{}, domain.ErrProviderUnavailable("metering")
+	default:
+		return domain.AuthContext{}, domain.ErrInvalidAPIKey("invalid API key")
+	}
+}
+
+func TestConfidentialReplayProtection(t *testing.T) {
+	calls := 0
+	h, client := newConfidentialTestHandler(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	now := time.Now()
+	h.now = func() time.Time { return now }
+	h.replays = newConfidentialReplayCache(confidentialReplayTTL, 3)
+	h.replays.accountCapacity = 2
+	send := func(key, id string, want int) {
+		t.Helper()
+		req, ctx, _ := newEncryptedConfidentialRequest(t, client, envelopeAt(now, id, json.RawMessage(`{"model":"test"}`)))
+		req.Header.Del("Authorization")
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		w := httptest.NewRecorder()
+		h.Handle(w, req)
+		body := decryptConfidentialResponse(t, w, ctx)
+		if w.Code != want {
+			t.Fatalf("status = %d, want %d; body = %s", w.Code, want, body)
+		}
+	}
+	for _, key := range []string{"", "forged-key", "unavailable"} {
+		want := http.StatusUnauthorized
+		if key == "unavailable" {
+			want = http.StatusServiceUnavailable
+		}
+		send(key, uuid.NewString(), want)
+	}
+	if len(h.replays.entries) != 0 || calls != 0 {
+		t.Fatal("rejected credentials consumed replay state or reached downstream")
+	}
+	id := uuid.NewString()
+	send("nexus-test-key", id, http.StatusOK)
+	send("nexus-test-key", id, http.StatusConflict)
+	send("nexus-test-key", uuid.NewString(), http.StatusOK)
+	// Rotating keys does not bypass an account's quota.
+	send("nexus-rotated-key", uuid.NewString(), http.StatusTooManyRequests)
+	// Another account remains usable and owns a distinct UUID namespace.
+	send("nexus-other-key", id, http.StatusOK)
+	send("nexus-other-key", uuid.NewString(), http.StatusServiceUnavailable)
+	send("nexus-test-key", id, http.StatusConflict)
+	if len(h.replays.entries) != 3 || h.replays.expirations.Len() != 3 || calls != 3 {
+		t.Fatal("capacity handling discarded replay protection")
+	}
+	now = now.Add(confidentialReplayTTL + time.Second)
+	send("nexus-test-key", id, http.StatusOK)
+	if len(h.replays.entries) != 1 || h.replays.expirations.Len() != 1 || len(h.replays.accounts) != 1 || h.replays.accounts["account-a"] != 1 {
+		t.Fatal("expired replay entries or account counts were retained")
+	}
+	identity, err := identity.NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewConfidentialChatCompletionsHandler(identity, nil, http.HandlerFunc(h.Handle), &confidentialTestLogger{}); err == nil {
+		t.Fatal("missing authentication service accepted")
+	}
+}
+
+func TestConfidentialReplayCacheConcurrentLimit(t *testing.T) {
+ cache := newConfidentialReplayCache(confidentialReplayTTL, 4)
+ cache.accountCapacity = 2
+ results := make(chan replayResult, 64)
+ for range 64 {
+  go func() { results <- cache.checkAndStore("account", uuid.NewString(), time.Now) }()
+ }
+ accepted := 0
+ for range 64 {
+  switch result := <-results; result {
+  case replayAccepted: accepted++
+  case replayAccountCapacityReached:
+  default: t.Fatalf("unexpected concurrent result %d", result)
+  }
+ }
+ if accepted != 2 || len(cache.entries) != 2 || cache.expirations.Len() != 2 || cache.accounts["account"] != 2 {
+  t.Fatal("concurrent requests bypassed the account quota or corrupted replay state")
+ }
+ for key := range cache.entries {
+  if got := cache.checkAndStore(key.accountID, key.requestID, time.Now); got != replayDuplicate { t.Fatal("live replay protection was lost") }
+ }
 }

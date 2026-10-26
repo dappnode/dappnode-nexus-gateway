@@ -191,7 +191,7 @@ func (a *Adapter) Complete(ctx context.Context, raw []byte, model domain.PublicM
 // proxy sends body with the provider's retry policy (Novita's transient
 // rejections), and maps provider errors to gateway errors.
 func (a *Adapter) proxy(ctx context.Context, body map[string]any, transforms []string, model domain.PublicModel, send func(context.Context, string, map[string]any) (*http.Response, error)) (*http.Response, error) {
-	apiKey := resolveAPIKey(model.ProviderConfig.APIKeySecretRef)
+	apiKey := ResolveAPIKey(model.ProviderConfig.APIKeySecretRef)
 	if apiKey == "" {
 		return nil, missingProviderCredentialError(model.ProviderConfig.ProviderName)
 	}
