@@ -35,6 +35,7 @@ const (
 	ErrCodeUnknownField            = "unknown_field"
 	ErrCodeInsufficientBalance     = "insufficient_balance"
 	ErrCodeDailyTokenLimit         = "daily_token_limit_exceeded"
+	ErrCodeConfidentialLimit       = "confidential_request_limit_exceeded"
 	ErrCodeClientCanceled          = "client_canceled"
 	ErrCodeInternalError           = "internal_error"
 )

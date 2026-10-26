@@ -21,7 +21,7 @@ const evaluationRequest = `{"model":"public-jev","state":{"email":"jane@example.
 const evaluationResponse = `{"model":"jev-1.13.0","answers":{"urgent":{"type":"noul","noul":0.95},"team":{"type":"choice","choice":"support","probabilities":{"support":1,"sales":0},"confidence":1},"rating":{"type":"score","score":0,"legend":{"0":"[EMAIL_1]","1":"Other"},"probabilities":{"0":1,"1":0},"confidence":1}},"usage":{"input_tokens":296,"output_tokens":20}}`
 
 func TestSystemOne(t *testing.T) {
-	t.Setenv("TEST_TYPESAFE_KEY", "upstream-secret")
+	t.Setenv("TEST_TYPESAFE_API_KEY", "upstream-secret")
 	status := http.StatusOK
 	response := evaluationResponse
 	upstreamCalls := 0
@@ -38,7 +38,7 @@ func TestSystemOne(t *testing.T) {
 		_, _ = w.Write([]byte(response))
 	}))
 	defer server.Close()
-	model := domain.PublicModel{PublicModelID: "public-jev", ProviderModelID: "pm", UpstreamModelName: "jev-latest", ProviderConfig: domain.ProviderConfig{ProviderName: "typesafe", BaseURL: server.URL + "/v1/", APIKeySecretRef: "TEST_TYPESAFE_KEY"}, MaxContextWindow: 4096, MaxOutputTokens: 256}
+	model := domain.PublicModel{PublicModelID: "public-jev", ProviderModelID: "pm", UpstreamModelName: "jev-latest", ProviderConfig: domain.ProviderConfig{ProviderName: "typesafe", BaseURL: server.URL + "/v1/", APIKeySecretRef: "TEST_TYPESAFE_API_KEY"}, MaxContextWindow: 4096, MaxOutputTokens: 256}
 	meter := &resultMeter{}
 	auth := &stubAuthService{authCtx: domain.AuthContext{Account: domain.Account{ID: "acc"}, APIKey: domain.APIKey{ID: "key", PIIMode: domain.APIKeyPIIModeBalanced}}}
 	filter := &fakePIIFilter{enabled: true, byText: map[string][]domain.PIIEntity{"jane@example.com": {entity("EMAIL", "jane@example.com", "jane@example.com")}}}

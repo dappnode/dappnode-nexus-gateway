@@ -45,7 +45,7 @@ func (m *streamUsageReproMeter) RecordFailure(_ context.Context, _ *string, _ *d
 func TestStreamingUsageRetention(t *testing.T) {
 	const usage = `{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}`
 	const toolDelta = `{"tool_calls":[{"index":0,"id":"call-local","type":"function","function":{"name":"lookup","arguments":"{}"}}]}`
-	t.Setenv("NEXUS_STREAM_REPRO_PROVIDER_KEY", "local-test-only")
+	t.Setenv("NEXUS_STREAM_REPRO_PROVIDER_API_KEY", "local-test-only")
 
 	for _, tc := range []struct {
 		name         string
@@ -110,7 +110,7 @@ func TestStreamingUsageRetention(t *testing.T) {
 				SupportsChatCompletions: true, Capabilities: json.RawMessage(`{"streaming":true,"tool_call":true}`),
 				ProviderConfig: domain.ProviderConfig{
 					ProviderName: "novita", BaseURL: upstream.URL,
-					APIKeySecretRef: "NEXUS_STREAM_REPRO_PROVIDER_KEY",
+					APIKeySecretRef: "NEXUS_STREAM_REPRO_PROVIDER_API_KEY",
 				},
 			}
 			logger := &mockLogger{}

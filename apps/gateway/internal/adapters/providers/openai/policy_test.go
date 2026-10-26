@@ -14,7 +14,7 @@ import (
 )
 
 func TestAdapterComplete_NovitaRetriesTheSameBody(t *testing.T) {
-	t.Setenv("NOVITA_TEST_KEY", "test-key")
+	t.Setenv("NOVITA_TEST_API_KEY", "test-key")
 	var attempts int
 	var bodies []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +57,7 @@ func TestAdapterComplete_NovitaRetriesTheSameBody(t *testing.T) {
 }
 
 func TestAdapterComplete_NovitaNamedToolChoiceFailsClearlyAfterSameBodyRetry(t *testing.T) {
-	t.Setenv("NOVITA_TEST_KEY", "test-key")
+	t.Setenv("NOVITA_TEST_API_KEY", "test-key")
 	var attempts int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
@@ -84,7 +84,7 @@ func TestAdapterComplete_NovitaNamedToolChoiceFailsClearlyAfterSameBodyRetry(t *
 }
 
 func TestAdapterComplete_NovitaSafeRetryStillReportsNamedToolChoiceIncompatibility(t *testing.T) {
-	t.Setenv("NOVITA_TEST_KEY", "test-key")
+	t.Setenv("NOVITA_TEST_API_KEY", "test-key")
 	var attempts int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
@@ -111,7 +111,7 @@ func TestAdapterComplete_NovitaSafeRetryStillReportsNamedToolChoiceIncompatibili
 }
 
 func TestAdapterComplete_NovitaFailedSameBodyRetryIncludesProviderParams(t *testing.T) {
-	t.Setenv("NOVITA_TEST_KEY", "test-key")
+	t.Setenv("NOVITA_TEST_API_KEY", "test-key")
 	var attempts int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
@@ -153,7 +153,7 @@ func TestAdapterComplete_NovitaFailedSameBodyRetryIncludesProviderParams(t *test
 }
 
 func TestAdapterComplete_NovitaServerOverloadRetriesSameBody(t *testing.T) {
-	t.Setenv("NOVITA_TEST_KEY", "test-key")
+	t.Setenv("NOVITA_TEST_API_KEY", "test-key")
 	var attempts int
 	var firstBody map[string]any
 	var secondBody map[string]any
@@ -245,7 +245,7 @@ func novitaModel(baseURL string) domain.PublicModel {
 		ProviderConfig: domain.ProviderConfig{
 			ProviderName:    "novita",
 			BaseURL:         baseURL,
-			APIKeySecretRef: "NOVITA_TEST_KEY",
+			APIKeySecretRef: "NOVITA_TEST_API_KEY",
 		},
 	}
 }

@@ -120,3 +120,21 @@ development workflow.
 
 Licensed under [Apache-2.0](LICENSE). Bundled dependency notices are available
 in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Operator security notes
+
+Provider `api_key_secret_ref` values must name uppercase environment variables
+ending in `_API_KEY` (for example `TINFOIL_API_KEY`). Other references fail closed;
+internal credentials such as `METERING_TOKEN` cannot be used as provider keys.
+
+The Nitro confidential endpoint authenticates before storing replay IDs. Each
+account may retain at most 10,000 IDs during the three-minute replay window,
+shared across its API keys; excess requests return 429 with
+`confidential_request_limit_exceeded`. The process-wide limit remains 100,000.
+Live entries are never evicted to admit new requests. Metrics bind to loopback
+in Nitro builds and retain their internal-network listener in ordinary builds.
+
+PII masking covers conversation text, tool results, assistant reasoning, tool-call
+argument string values, and `user`. Tool definitions, names, IDs, schemas,
+metadata, provider options, and image/audio content are not scanned. Keep
+personal data out of those fields even when masking is enabled.

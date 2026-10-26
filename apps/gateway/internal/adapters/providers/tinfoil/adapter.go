@@ -264,7 +264,7 @@ func (c *sdkVerifiedClient) GroundTruth() *verifierclient.GroundTruth {
 // Stream forwards a streaming request over the attested transport and
 // returns the SSE body untouched, with the transport proof.
 func (a *Adapter) Stream(ctx context.Context, raw []byte, model domain.PublicModel) (ports.ProviderStream, error) {
-	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
+	apiKey := openai.ResolveAPIKey(model.ProviderConfig.APIKeySecretRef)
 	if apiKey == "" {
 		return ports.ProviderStream{}, missingProviderCredentialError()
 	}
@@ -285,7 +285,7 @@ func (a *Adapter) Stream(ctx context.Context, raw []byte, model domain.PublicMod
 
 // Complete forwards a non-streaming request over the attested transport.
 func (a *Adapter) Complete(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
-	apiKey := os.Getenv(model.ProviderConfig.APIKeySecretRef)
+	apiKey := openai.ResolveAPIKey(model.ProviderConfig.APIKeySecretRef)
 	if apiKey == "" {
 		return nil, nil, missingProviderCredentialError()
 	}

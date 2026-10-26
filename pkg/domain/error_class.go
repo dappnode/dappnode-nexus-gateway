@@ -37,6 +37,7 @@ const (
 
 var faultByCode = map[string]string{
 	ErrCodeInvalidAPIKey:           FaultCaller,
+	ErrCodeConfidentialLimit:       FaultCaller,
 	ErrCodeInactiveAPIKey:          FaultCaller,
 	ErrCodeInactiveAccount:         FaultCaller,
 	ErrCodeUnsupportedModel:        FaultCaller,
