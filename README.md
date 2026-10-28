@@ -91,6 +91,19 @@ keep a valid `Retry-After` header. Errors include `origin` (`gateway` or
 details are not exposed. A configured fallback provider is tried only after a
 rate limit or a server-side failure, never after a rejected request.
 
+The gateway protects callers from a provider that keeps failing. After five
+provider failures in a row (outages, timeouts, server errors or a broken
+provider account; never a rejected request, a rate limit or a canceled
+client), it stops sending to that provider for 30 seconds: requests go
+straight to the model's fallback provider, or, without one, fail at once with
+503 `provider_unavailable` and a `Retry-After` header. One request then
+probes the provider; a failed probe doubles the pause, up to five minutes.
+Without a fallback, a connection error or a 502/503 that the provider returned
+within five seconds and before any output is retried once. A request reaches
+at most two provider attempts. `PROVIDER_BREAKER_FAILURES` (0 turns the
+breaker off), `PROVIDER_BREAKER_OPEN_SECONDS`, `PROVIDER_BREAKER_MAX_OPEN_SECONDS`
+and `PROVIDER_RETRY_FAST_FAILURES` change these defaults.
+
 Responses have no limit on total duration. Two stall guards apply instead:
 `PROVIDER_SILENCE_TIMEOUT_SECONDS` (default 900) ends a request when the
 provider sends nothing, neither headers nor bytes, for that long, and

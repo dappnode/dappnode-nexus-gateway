@@ -44,6 +44,9 @@ func TestSystemOne(t *testing.T) {
 	filter := &fakePIIFilter{enabled: true, byText: map[string][]domain.PIIEntity{"jane@example.com": {entity("EMAIL", "jane@example.com", "jane@example.com")}}}
 	catalog := &stubModelCatalog{model: model}
 	svc := NewGenerateService(auth, catalog, nil, &stubProviderRegistry{providers: map[string]ports.Provider{"typesafe": typesafe.NewAdapter(time.Second)}}, meter, filter, stubLogger{})
+	// These checks repeat failures on purpose; the circuit breaker would answer
+	// in the provider's place after a few, so it is off here.
+	svc.SetSelfHealing(SelfHealing{})
 	req, err := mapper.SystemOneRequestToDomain([]byte(evaluationRequest))
 	if err != nil {
 		t.Fatal(err)

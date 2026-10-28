@@ -92,6 +92,11 @@ func main() {
 	listModelsSvc := services.NewListModelsServiceWithRateProvider(modelCatalog, zapLogger, fxProvider, eurToUSDFallbackRate)
 	generateSvc := services.NewGenerateService(authService, modelCatalog, routerClient, providerRegistry, meteringClient, piiFilter, zapLogger)
 	generateSvc.SetPIIOptions(piiLang, piiFailOpen)
+	selfHealing, err := loadSelfHealing()
+	if err != nil {
+		log.Fatal(err)
+	}
+	generateSvc.SetSelfHealing(selfHealing)
 	generateSvc.SetTinfoilProofRepository(tinfoilProofRepo)
 	chatCompletionsSvc := services.NewChatCompletionsService(generateSvc, zapLogger)
 

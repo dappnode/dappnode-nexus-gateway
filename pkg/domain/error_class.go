@@ -33,6 +33,8 @@ const (
 	CauseRouterBadResponse     = "router_bad_response"
 	CauseReplayStoreFull       = "replay_store_full"
 	CauseUntypedError          = "untyped_error"
+	// The provider kept failing, so the gateway stopped sending to it for a while.
+	CauseCircuitOpen = "circuit_open"
 )
 
 var faultByCode = map[string]string{
