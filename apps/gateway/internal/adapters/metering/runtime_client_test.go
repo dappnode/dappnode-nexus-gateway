@@ -52,6 +52,31 @@ func TestRuntimeClientAuthenticateHashesAPIKeyLocally(t *testing.T) {
 	}
 }
 
+// The guest flag decides whether the guest policy applies, so it must survive
+// the trip from metering; an older metering that omits it means "not a guest".
+func TestRuntimeClientAuthenticateReadsTheGuestFlag(t *testing.T) {
+	for _, tc := range []struct {
+		account string
+		want    bool
+	}{
+		{`{"id":"acc-1","status":"active","is_guest":true}`, true},
+		{`{"id":"acc-1","status":"active","is_guest":false}`, false},
+		{`{"id":"acc-1","status":"active"}`, false},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"account":` + tc.account + `,"api_key":{"id":"key-1","account_id":"acc-1","key_prefix":"nxs_1234","active":true,"pii_mode":"off"}}`))
+		}))
+		auth, err := NewClient(server.URL, "token", time.Second).AuthenticateAPIKey(context.Background(), "sk-x")
+		server.Close()
+		if err != nil {
+			t.Fatalf("AuthenticateAPIKey: %v", err)
+		}
+		if auth.Account.IsGuest != tc.want {
+			t.Fatalf("account %s: IsGuest = %v, want %v", tc.account, auth.Account.IsGuest, tc.want)
+		}
+	}
+}
+
 func TestRuntimeClientPreservesUserAuthenticationErrors(t *testing.T) {
 	tests := []struct {
 		name      string

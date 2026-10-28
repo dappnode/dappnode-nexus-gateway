@@ -138,3 +138,13 @@ PII masking covers conversation text, tool results, assistant reasoning, tool-ca
 argument string values, and `user`. Tool definitions, names, IDs, schemas,
 metadata, provider options, and image/audio content are not scanned. Keep
 personal data out of those fields even when masking is enabled.
+
+Guest chat keys (accounts flagged `is_guest` by Metering) are narrowed by
+`services.GuestPolicy`: only the models in `GUEST_MODELS` (default
+`deepseek/deepseek-v4.1-flash`), requests up to `GUEST_MAX_REQUEST_BYTES`
+(default 16384), output capped at `GUEST_MAX_OUTPUT_TOKENS` (default 1024) and
+written into the request, and only plain chat fields with text content. The
+reservation for a guest request is bounded by the bytes sent upstream rather
+than the model's context window, so it fits a guest's small credit. Invalid
+values stop the gateway at startup. The Nexus repository's
+`docs/guest-chat.md` describes the whole design.

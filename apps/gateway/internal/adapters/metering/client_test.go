@@ -282,3 +282,35 @@ func TestClientReserve_MapsDailyTokenLimitWithoutRetry(t *testing.T) {
 		t.Fatalf("quota error retried %d times", attempts.Load())
 	}
 }
+
+// The prompt bound the gateway computed for a guest reaches metering, which
+// reserves for it instead of the model's context window.
+func TestClientReserve_SendsTheInputTokenBound(t *testing.T) {
+	var got map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"reservation_id":"res-1"}`))
+	}))
+	defer server.Close()
+
+	bound, output := 1234, 50
+	req := domain.GenerateRequest{PublicModelID: "m", MaxInputTokens: &bound, MaxOutputTokens: &output}
+	if _, err := NewClient(server.URL, "token", time.Second).Reserve(context.Background(), domain.AuthContext{}, "chat_completions", req, domain.PublicModel{PublicModelID: "m"}, "req-1"); err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	if got["max_input_tokens"] != float64(1234) || got["max_output_tokens"] != float64(50) {
+		t.Fatalf("reservation body = %v", got)
+	}
+
+	// Without a bound the field is left out, so metering uses the context window.
+	got = nil
+	req.MaxInputTokens = nil
+	if _, err := NewClient(server.URL, "token", time.Second).Reserve(context.Background(), domain.AuthContext{}, "chat_completions", req, domain.PublicModel{PublicModelID: "m"}, "req-2"); err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	if _, present := got["max_input_tokens"]; present {
+		t.Fatalf("unbounded request sent max_input_tokens: %v", got)
+	}
+}

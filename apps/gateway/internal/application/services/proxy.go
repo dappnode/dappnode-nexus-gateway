@@ -56,6 +56,14 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		}
 		return domain.Annotate(err, "account_id", authCtx.Account.ID, "model", model.PublicModelID, "provider", model.ProviderConfig.ProviderName)
 	}
+	if authCtx.Account.IsGuest {
+		raw, req, err = s.applyGuestPolicy(endpoint, raw, req)
+		if err != nil {
+			s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
+			s.recordError(endpoint, req, nil, metrics.PhaseRequest, err)
+			return nil, reject(err, nil)
+		}
+	}
 	var model domain.PublicModel
 	execReq := req
 	if endpoint == domain.EndpointSystemOne {
@@ -82,6 +90,12 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
 		return nil, reject(err, &model)
+	}
+	if authCtx.Account.IsGuest {
+		// Reserve for the prompt actually sent, not the model's whole context
+		// window, so a short guest message fits in a guest's credit.
+		bound := s.guest.PromptTokenBound(masked)
+		execReq.MaxInputTokens = &bound
 	}
 	reservationID, err := s.metering.Reserve(ctx, authCtx, endpoint, execReq, model, uuid.NewString())
 	if err != nil {

@@ -30,6 +30,9 @@ type Account struct {
 	// LastUsedAt is the most recent `last_used_at` across the account's API keys.
 	// Populated only by list queries that aggregate key usage; nil elsewhere.
 	LastUsedAt *time.Time
+	// IsGuest marks a guest chat account: a landing-page visitor without a
+	// login. Its requests are narrowed by services.GuestPolicy.
+	IsGuest bool
 }
 
 // IsActive returns true if the account status is "active".
