@@ -36,6 +36,8 @@ const (
 	ErrCodeInsufficientBalance     = "insufficient_balance"
 	ErrCodeDailyTokenLimit         = "daily_token_limit_exceeded"
 	ErrCodeConfidentialLimit       = "confidential_request_limit_exceeded"
+	ErrCodeGuestNotAllowed         = "guest_not_allowed"
+	ErrCodeGuestRequestTooLarge    = "guest_request_too_large"
 	ErrCodeClientCanceled          = "client_canceled"
 	ErrCodeInternalError           = "internal_error"
 )
@@ -147,6 +149,21 @@ func ErrConflict(msg string) *GatewayError {
 func ErrNotFound(resource, id string) *GatewayError {
 	return &GatewayError{HTTPStatus: 404, Type: ErrTypeInvalidRequest, Code: ErrCodeNotFound, Message: fmt.Sprintf("%s '%s' not found", resource, id)}
 }
+
+// ErrGuestNotAllowed rejects a guest chat request that uses something guests
+// cannot: another endpoint or model, a request field, or non-text content.
+func ErrGuestNotAllowed(what string) *GatewayError {
+	return &GatewayError{HTTPStatus: 403, Type: ErrTypePermission, Code: ErrCodeGuestNotAllowed,
+		Message: fmt.Sprintf("Guest chat does not support %s. Sign up to use it.", what)}
+}
+
+// ErrGuestRequestTooLarge rejects a guest chat request above the size limit:
+// in practice a conversation that grew too long.
+func ErrGuestRequestTooLarge(limitBytes int) *GatewayError {
+	return &GatewayError{HTTPStatus: 413, Type: ErrTypeInvalidRequest, Code: ErrCodeGuestRequestTooLarge,
+		Message: fmt.Sprintf("This conversation is too long for guest chat (limit %d bytes). Start a new chat or sign up to continue.", limitBytes)}
+}
+
 func ErrInsufficientBalance() *GatewayError {
 	return &GatewayError{HTTPStatus: 402, Type: ErrTypePermission, Code: ErrCodeInsufficientBalance, Message: "Account has no spendable balance"}
 }

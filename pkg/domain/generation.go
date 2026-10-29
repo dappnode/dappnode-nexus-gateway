@@ -33,6 +33,10 @@ type GenerateRequest struct {
 	ParallelToolCalls *bool
 	// StructuredOutput is set when the client asks for JSON output.
 	StructuredOutput bool
+	// MaxInputTokens bounds the prompt in metering's reservation when the
+	// gateway capped the request size (guest keys); nil means the model's
+	// context window.
+	MaxInputTokens *int
 }
 
 // InputItem is one message: its role and text.

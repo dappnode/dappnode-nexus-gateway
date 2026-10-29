@@ -25,6 +25,7 @@ type GenerateService struct {
 	piiLang       string
 	piiFailOpen   bool
 	tinfoilProofs ports.TinfoilTransportProofRepository
+	guest         *GuestPolicy
 	logger        ports.Logger
 }
 
@@ -56,6 +57,20 @@ func (s *GenerateService) SetPIIOptions(language string, failOpen bool) {
 		s.piiLang = language
 	}
 	s.piiFailOpen = failOpen
+}
+
+// SetGuestPolicy sets the limits for guest chat keys. Without a policy,
+// guest keys are refused.
+func (s *GenerateService) SetGuestPolicy(policy GuestPolicy) {
+	s.guest = &policy
+}
+
+// applyGuestPolicy narrows a guest's request; see GuestPolicy.
+func (s *GenerateService) applyGuestPolicy(endpoint string, raw []byte, req domain.GenerateRequest) ([]byte, domain.GenerateRequest, error) {
+	if s.guest == nil {
+		return nil, req, domain.ErrGuestNotAllowed("this gateway")
+	}
+	return s.guest.Apply(endpoint, raw, req)
 }
 
 func (s *GenerateService) SetTinfoilProofRepository(proofs ports.TinfoilTransportProofRepository) {

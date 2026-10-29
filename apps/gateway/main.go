@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -93,6 +95,13 @@ func main() {
 	generateSvc := services.NewGenerateService(authService, modelCatalog, routerClient, providerRegistry, meteringClient, piiFilter, zapLogger)
 	generateSvc.SetPIIOptions(piiLang, piiFailOpen)
 	generateSvc.SetTinfoilProofRepository(tinfoilProofRepo)
+	guestPolicy, err := guestPolicyFromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("invalid guest chat configuration: %v", err)
+	}
+	generateSvc.SetGuestPolicy(guestPolicy)
+	zapLogger.Info("guest chat limits", "models", strings.Join(slices.Sorted(maps.Keys(guestPolicy.Models)), ","),
+		"max_request_bytes", guestPolicy.MaxRequestBytes, "max_output_tokens", guestPolicy.MaxOutputTokens)
 	chatCompletionsSvc := services.NewChatCompletionsService(generateSvc, zapLogger)
 
 	healthHandler := handlers.NewHealthHandler()
