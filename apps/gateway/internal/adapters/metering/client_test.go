@@ -38,6 +38,37 @@ func TestClientReserve_MapsInsufficientBalance(t *testing.T) {
 	}
 }
 
+func TestClientReserve_SendsHoldSizing(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode reserve payload: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"reservation_id":"r-1"}`))
+	}))
+	defer server.Close()
+
+	estimate, maxTokens := int64(9_216), 512
+	client := NewClient(server.URL, "token", time.Second)
+	req := domain.GenerateRequest{PublicModelID: "model", EstimatedInputTokens: &estimate, MaxOutputTokens: &maxTokens}
+	if _, err := client.Reserve(context.Background(), testAuth(), domain.EndpointChatCompletions, req, testModel(), "gw-1"); err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	if payload["estimated_input_tokens"] != float64(9_216) || payload["max_output_tokens"] != float64(512) {
+		t.Fatalf("hold sizing = estimate %v/max output %v, want 9216/512", payload["estimated_input_tokens"], payload["max_output_tokens"])
+	}
+
+	// Without an estimate the field is omitted, so Metering holds the whole
+	// context window.
+	payload = nil
+	if _, err := client.Reserve(context.Background(), testAuth(), domain.EndpointChatCompletions, domain.GenerateRequest{PublicModelID: "model"}, testModel(), "gw-2"); err != nil {
+		t.Fatalf("Reserve without estimate: %v", err)
+	}
+	if _, present := payload["estimated_input_tokens"]; present {
+		t.Fatalf("payload = %v, want no estimated_input_tokens", payload)
+	}
+}
+
 func TestClientReserve_MapsInternalContractErrorsToInternalError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusConflict)

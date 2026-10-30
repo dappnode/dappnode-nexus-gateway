@@ -83,6 +83,10 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
 		return nil, reject(err, &model)
 	}
+	// The hold covers the prompt as sent upstream, after masking.
+	if tokens, ok := estimateInputTokens(endpoint, masked); ok {
+		execReq.EstimatedInputTokens = &tokens
+	}
 	reservationID, err := s.metering.Reserve(ctx, authCtx, endpoint, execReq, model, uuid.NewString())
 	if err != nil {
 		err = clientGone(ctx, err)

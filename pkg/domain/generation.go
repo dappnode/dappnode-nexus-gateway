@@ -27,10 +27,13 @@ type GenerateRequest struct {
 	Input []InputItem
 	Tools []ToolDefinition
 
-	Stream            bool
-	MaxOutputTokens   *int
-	ServiceTier       *string
-	ParallelToolCalls *bool
+	Stream          bool
+	MaxOutputTokens *int
+	// EstimatedInputTokens is an upper bound on the prompt's tokens, sized
+	// from the body sent upstream; nil when no bound is known.
+	EstimatedInputTokens *int64
+	ServiceTier          *string
+	ParallelToolCalls    *bool
 	// StructuredOutput is set when the client asks for JSON output.
 	StructuredOutput bool
 }
