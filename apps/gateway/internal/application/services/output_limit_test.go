@@ -49,11 +49,11 @@ func TestProxy_ChatRequestsCarryTheOutputLimit(t *testing.T) {
 		body, field string
 		want        float64
 	}{
-		"guest, no limit":                {true, `{"model":"model",` + user + `}`, "max_tokens", 50},
+		"guest, no limit":                {true, `{"model":"model",` + user + `}`, "max_completion_tokens", 50},
 		"guest, larger limit":            {true, `{"model":"model",` + user + `,"max_tokens":4000}`, "max_tokens", 50},
 		"guest, smaller limit is kept":   {true, `{"model":"model",` + user + `,"max_tokens":20}`, "max_tokens", 20},
 		"guest, max_completion_tokens":   {true, `{"model":"model",` + user + `,"max_completion_tokens":4000}`, "max_completion_tokens", 50},
-		"account, no limit":              {false, `{"model":"model",` + user + `}`, "max_tokens", DefaultMaxOutputTokens},
+		"account, no limit":              {false, `{"model":"model",` + user + `}`, "max_completion_tokens", DefaultMaxOutputTokens},
 		"account, larger limit":          {false, `{"model":"model",` + user + `,"max_tokens":100000}`, "max_tokens", DefaultMaxOutputTokens},
 		"account, smaller limit is kept": {false, `{"model":"model",` + user + `,"max_tokens":80}`, "max_tokens", 80},
 	} {

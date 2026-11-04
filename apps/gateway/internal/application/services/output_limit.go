@@ -36,12 +36,14 @@ func capOutput(raw []byte, req domain.GenerateRequest, limit int) ([]byte, domai
 	if err := dec.Decode(&body); err != nil || body == nil {
 		return nil, req, domain.ErrInvalidField("invalid JSON body")
 	}
-	// Keep the client's field name; providers that need max_tokens get it from
-	// the provider adapter. The mapper refuses requests that set both.
-	if _, ok := body["max_completion_tokens"]; ok {
-		body["max_completion_tokens"] = limit
-	} else {
+	// Keep the client's field name, or use OpenAI's current one. The provider
+	// adapter sends max_tokens to providers that ignore max_completion_tokens
+	// (DeepSeek); every other provider enforces both (checked 2026-11-04).
+	// The mapper refuses requests that set both.
+	if _, ok := body["max_tokens"]; ok {
 		body["max_tokens"] = limit
+	} else {
+		body["max_completion_tokens"] = limit
 	}
 	rewritten, err := json.Marshal(body)
 	if err != nil {
