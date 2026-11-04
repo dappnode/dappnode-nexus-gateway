@@ -94,6 +94,14 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
 		return nil, reject(err, &model)
 	}
+	// From here the provider runs and bills us, so the request no longer
+	// follows the client's connection. A client that hangs up still gets its
+	// answer finished, and is charged the usage the provider reports at the
+	// end. Cutting the answer off instead would leave no usage to charge,
+	// while the provider still bills what it generated. clientCtx only stops
+	// a fallback answer nobody would read.
+	clientCtx := ctx
+	ctx = context.WithoutCancel(ctx)
 	ctx, cancelInference := context.WithCancelCause(ctx)
 	stopRenewal := func() {}
 	if keeper, ok := s.metering.(ports.ReservationKeeper); ok {
@@ -168,7 +176,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 
 	call, err := attempt(model)
 	executed := model
-	if err != nil && shouldTryFallback(ctx, err, model.Fallback) &&
+	if err != nil && clientCtx.Err() == nil && shouldTryFallback(ctx, err, model.Fallback) &&
 		withProviderTarget(model, *model.Fallback).SupportsEndpoint(endpoint) {
 		executed = withProviderTarget(model, *model.Fallback)
 		s.logFallback(requestID, model, executed, sanitizeErrorWithPIIMapping(err, mapping))
@@ -612,9 +620,6 @@ func (p *ProxyStream) Next() ([]byte, error) {
 
 // Complete reports whether the provider finished the response cleanly.
 func (p *ProxyStream) Complete() bool { return p.sawDone || p.o.finish != nil }
-
-// Finished reports whether a finish reason has passed.
-func (p *ProxyStream) Finished() bool { return p.o.finish != nil }
 
 // SawDone reports whether the provider sent [DONE].
 func (p *ProxyStream) SawDone() bool { return p.sawDone }
