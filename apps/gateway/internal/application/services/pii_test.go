@@ -122,7 +122,9 @@ func TestPII_InvalidJSONToolArgumentsMaskedAsText(t *testing.T) {
 }
 
 func TestPII_BypassAndFailureModes(t *testing.T) {
-	raw := `{"messages":[{"role":"user","content":"hi Jane"}],"seed":9007199254740993}`
+	// The request sets its own output limit, so only masking can change it.
+	raw := `{"messages":[{"role":"user","content":"hi Jane"}],"seed":9007199254740993,"max_tokens":100}`
+	maxTokens := 100
 	detect := map[string][]domain.PIIEntity{"hi Jane": {entity("PERSON", "Jane", "hi Jane")}}
 	for name, tc := range map[string]struct {
 		filter   *fakePIIFilter
@@ -142,7 +144,7 @@ func TestPII_BypassAndFailureModes(t *testing.T) {
 			provider := &stubProvider{}
 			svc, meter := piiService(tc.filter, tc.mode, provider)
 			svc.piiFailOpen = tc.failOpen
-			_, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(raw), domain.GenerateRequest{PublicModelID: "zai-org/glm-5.3-flash"}, "key")
+			_, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(raw), domain.GenerateRequest{PublicModelID: "zai-org/glm-5.3-flash", MaxOutputTokens: &maxTokens}, "key")
 			if tc.wantErr {
 				if err == nil || provider.calls != 0 || meter.reserveCalls != 0 {
 					t.Fatalf("err=%v calls=%d reserve=%d", err, provider.calls, meter.reserveCalls)

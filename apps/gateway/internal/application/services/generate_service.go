@@ -63,7 +63,7 @@ func (s *GenerateService) SetPIIOptions(language string, failOpen bool) {
 }
 
 // SetGuestMaxOutputTokens sets the output limit of guest chat requests; see
-// capGuestOutput.
+// capOutput.
 func (s *GenerateService) SetGuestMaxOutputTokens(limit int) {
 	s.guestMaxOutputTokens = limit
 }
