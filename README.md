@@ -138,3 +138,11 @@ PII masking covers conversation text, tool results, assistant reasoning, tool-ca
 argument string values, and `user`. Tool definitions, names, IDs, schemas,
 metadata, provider options, and image/audio content are not scanned. Keep
 personal data out of those fields even when masking is enabled.
+
+Guest chat accounts (flagged `is_guest` by Metering; a landing-page visitor
+with a small credit and no login) are ordinary accounts with one difference:
+their chat requests always carry an output limit of at most
+`GUEST_MAX_OUTPUT_TOKENS` (default 8192), written into the request so the
+provider enforces it. Metering holds credit for that limit, so a guest's answer
+can never cost more than its hold. An invalid value stops the gateway at
+startup. The Nexus repository's `docs/guest-chat.md` describes the design.
