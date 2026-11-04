@@ -61,7 +61,7 @@ func (e *GatewayError) WithMeta(fields ...any) *GatewayError {
 	if cp.Metadata == nil {
 		cp.Metadata = make(map[string]any, len(fields)/2)
 	} else {
-		m := make(map[string]any, len(cp.Metadata)+len(fields)/2)
+		m := make(map[string]any, len(cp.Metadata)) // Grows for the new fields.
 		for k, v := range cp.Metadata {
 			m[k] = v
 		}

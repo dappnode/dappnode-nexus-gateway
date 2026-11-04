@@ -231,16 +231,17 @@ func convertEntities(text string, items []analyzeResponseItem) []domain.PIIEntit
 		return nil
 	}
 
+	// totalRunes lets us bounds-check character offsets cheaply.
+	totalRunes := utf8.RuneCountInString(text)
+
 	// Build a runeIndex -> byteIndex lookup table. The final entry maps the
 	// past-the-end rune index to len(text), so we can convert exclusive ends.
-	runes := make([]int, 0, len(text)+1)
+	// The capacity is a hint; append grows the slice for the final entry.
+	runes := make([]int, 0, totalRunes)
 	for i := range text { // i is the byte index at each rune start
 		runes = append(runes, i)
 	}
 	runes = append(runes, len(text))
-
-	// totalRunes lets us bounds-check character offsets cheaply.
-	totalRunes := utf8.RuneCountInString(text)
 
 	out := make([]domain.PIIEntity, 0, len(items))
 	for _, it := range items {
