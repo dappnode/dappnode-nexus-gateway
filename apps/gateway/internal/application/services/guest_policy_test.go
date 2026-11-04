@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/mapper"
+	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/ports"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
 
@@ -204,5 +206,111 @@ func TestProxy_GuestPolicyLeavesOtherAccountsAlone(t *testing.T) {
 	}
 	if got := meter.lastReserveReq.MaxOutputTokens; got == nil || *got != 80 {
 		t.Fatalf("a signed-in request's output limit changed: %v", got)
+	}
+}
+
+// hangUpProvider streams from a pipe the test writes to, and records whether
+// the context it was given was cancelled when the client hung up.
+type hangUpProvider struct {
+	ctx    context.Context
+	body   *io.PipeReader
+	called chan struct{}
+	onCall func() // Complete calls it before reading ctx.
+	errAt  error  // Complete's ctx.Err() after onCall.
+}
+
+func (p *hangUpProvider) Stream(ctx context.Context, _ []byte, _ domain.PublicModel) (ports.ProviderStream, error) {
+	p.ctx = ctx
+	close(p.called)
+	return ports.ProviderStream{Body: p.body}, nil
+}
+
+func (p *hangUpProvider) Complete(ctx context.Context, _ []byte, _ domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error) {
+	p.ctx = ctx
+	close(p.called)
+	if p.onCall != nil {
+		p.onCall()
+	}
+	p.errAt = ctx.Err()
+	return []byte(stubAnswer), nil, nil
+}
+
+// A guest who hangs up mid-answer still pays for it: the provider keeps
+// generating, and the usage it reports at the end is charged. A signed-in
+// client that hangs up still stops the provider.
+func TestProxy_GuestThatHangsUpMidStreamIsCharged(t *testing.T) {
+	for _, guest := range []bool{true, false} {
+		meter := &stubUsageMeter{}
+		pr, pw := io.Pipe()
+		provider := &hangUpProvider{body: pr, called: make(chan struct{})}
+		svc := newGuestGenerateService(meter, &stubProvider{}, guest)
+		svc.registry = &stubProviderRegistry{providers: map[string]ports.Provider{"openai": provider}}
+		svc.SetGuestPolicy(GuestPolicy{Models: map[string]bool{"model": true}, MaxRequestBytes: 4096, MaxOutputTokens: 50})
+
+		body := `{"model":"model","messages":[{"role":"user","content":"hi"}],"stream":true}`
+		req, err := mapper.ChatCompletionRequestToDomain([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, hangUp := context.WithCancel(context.Background())
+		go func() {
+			<-provider.called
+			_, _ = io.WriteString(pw, "data: {\"id\":\"r\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\n")
+		}()
+		call, err := svc.Proxy(client, domain.EndpointChatCompletions, []byte(body), req, "sk-guest")
+		if err != nil {
+			t.Fatalf("guest=%v: Proxy: %v", guest, err)
+		}
+		hangUp()
+		if gotCancelled := provider.ctx.Err() != nil; gotCancelled == guest {
+			t.Fatalf("guest=%v: provider context cancelled = %v after the client hung up", guest, gotCancelled)
+		}
+		if !guest {
+			_ = pw.CloseWithError(context.Canceled) // What a cancelled HTTP body does.
+		} else {
+			go func() {
+				_, _ = io.WriteString(pw, "data: {\"id\":\"r\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n"+
+					"data: {\"id\":\"r\",\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2,\"total_tokens\":11}}\n\n"+
+					"data: [DONE]\n\n")
+				_ = pw.Close()
+			}()
+		}
+		for {
+			if _, err := call.Stream.Next(); err != nil {
+				break
+			}
+		}
+		_ = call.Stream.Close()
+		if guest && (meter.successCalls != 1 || meter.failureCalls != 0) {
+			t.Fatalf("guest hung up: success %d, failure %d; want the finished answer charged once", meter.successCalls, meter.failureCalls)
+		}
+		if !guest && meter.failureCalls != 1 {
+			t.Fatalf("signed-in client hung up: failure %d, want 1", meter.failureCalls)
+		}
+	}
+}
+
+// The same holds without streaming: the guest's provider call is not
+// cancelled by the client leaving while it runs.
+func TestProxy_GuestThatHangsUpBeforeACompleteAnswerIsCharged(t *testing.T) {
+	meter := &stubUsageMeter{}
+	client, hangUp := context.WithCancel(context.Background())
+	provider := &hangUpProvider{called: make(chan struct{}), onCall: hangUp}
+	svc := newGuestGenerateService(meter, &stubProvider{}, true)
+	svc.registry = &stubProviderRegistry{providers: map[string]ports.Provider{"openai": provider}}
+	svc.SetGuestPolicy(GuestPolicy{Models: map[string]bool{"model": true}, MaxRequestBytes: 4096, MaxOutputTokens: 50})
+	body := `{"model":"model","messages":[{"role":"user","content":"hi"}]}`
+	req, err := mapper.ChatCompletionRequestToDomain([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Proxy(client, domain.EndpointChatCompletions, []byte(body), req, "sk-guest"); err != nil {
+		t.Fatalf("Proxy: %v", err)
+	}
+	if provider.errAt != nil {
+		t.Fatalf("the client hanging up cancelled the guest's provider call: %v", provider.errAt)
+	}
+	if meter.successCalls != 1 {
+		t.Fatalf("success %d, want the answer charged once", meter.successCalls)
 	}
 }

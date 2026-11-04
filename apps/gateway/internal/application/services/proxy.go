@@ -104,6 +104,15 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
 		return nil, reject(err, &model)
 	}
+	stopGuestTimer := func() {}
+	if authCtx.Account.IsGuest {
+		// A guest's answer runs to the end even if the client hangs up. The
+		// provider bills what it generated, but only a finished response
+		// reports usage, and a request cut off without usage is released
+		// unpaid: hanging up just before the end would make guest chat free.
+		// The guest output cap keeps the extra generation short.
+		ctx, stopGuestTimer = context.WithTimeout(context.WithoutCancel(ctx), guestGenerationTimeout)
+	}
 	ctx, cancelInference := context.WithCancelCause(ctx)
 	stopRenewal := func() {}
 	if keeper, ok := s.metering.(ports.ReservationKeeper); ok {
@@ -111,7 +120,7 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 			cancelInference(domain.ErrInternal("credit reservation could not be maintained").WithMeta("dependency", "metering", "cause", domain.CauseCreditHoldLost))
 		})
 	}
-	stopLease := func() { stopRenewal(); cancelInference(nil) }
+	stopLease := func() { stopRenewal(); cancelInference(nil); stopGuestTimer() }
 	finish := func(target domain.PublicModel, o outcome) {
 		defer stopLease()
 		if cause, ok := context.Cause(ctx).(*domain.GatewayError); ok && o.err != nil {

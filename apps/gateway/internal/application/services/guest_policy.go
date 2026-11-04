@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
@@ -33,6 +34,11 @@ type GuestPolicy struct {
 // the gateway reserved for: the chat template's role markers and the fields
 // the provider adapter adds (model name, stream options).
 const guestPromptOverheadTokens = 256
+
+// guestGenerationTimeout bounds a guest request, which keeps running after
+// its client hangs up (see Proxy). MaxOutputTokens of output take well under
+// this on any guest model.
+const guestGenerationTimeout = 2 * time.Minute
 
 // guestRequestFields are the top-level request fields a guest may send.
 var guestRequestFields = map[string]bool{
