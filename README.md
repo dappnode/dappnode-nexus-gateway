@@ -139,12 +139,11 @@ argument string values, and `user`. Tool definitions, names, IDs, schemas,
 metadata, provider options, and image/audio content are not scanned. Keep
 personal data out of those fields even when masking is enabled.
 
-Every chat request carries an output limit, written into the request so the
-provider enforces it: the client's `max_tokens` (or `max_completion_tokens`)
-when it is smaller, otherwise 32,768. Metering holds credit for that limit, so
-an answer can never cost more than its hold and no request runs up a debt by
-leaving the limit unset. Guest chat accounts (flagged `is_guest` by Metering; a
-landing-page visitor with a small credit and no login) get a smaller limit,
-`GUEST_MAX_OUTPUT_TOKENS` (default 8192); otherwise their requests are ordinary
-requests. An invalid value stops the gateway at startup. The Nexus
-repository's `docs/guest-chat.md` describes guest chat.
+Guest chat accounts (flagged `is_guest` by Metering; a landing-page visitor
+with a small credit and no login) are ordinary accounts with one difference:
+their chat requests always carry an output limit of at most
+`GUEST_MAX_OUTPUT_TOKENS` (default 8192), written into the request so the
+provider enforces it. Metering holds credit for that limit, so a guest's hold
+fits its credit; other requests without `max_tokens` hold the model's maximum
+output. An invalid value stops the gateway at startup. The Nexus repository's
+`docs/guest-chat.md` describes guest chat.

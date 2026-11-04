@@ -7,25 +7,18 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
 
-// DefaultMaxOutputTokens is the output limit of a chat request that sets
-// none. It equals the output Metering holds for such a request
-// (metering.DefaultOutputHoldTokens in the Nexus repo), so the answer can
-// never outrun its hold.
-const DefaultMaxOutputTokens = 32_768
-
 // DefaultGuestMaxOutputTokens is the output limit of a guest's chat request
-// unless GUEST_MAX_OUTPUT_TOKENS sets another. It keeps a guest's hold well
-// inside its small credit and still covers almost every answer, reasoning
-// included: over a week of production traffic on DeepSeek V4.1 Flash, answers
+// unless GUEST_MAX_OUTPUT_TOKENS sets another. Without it a guest's request
+// would hold the model's maximum output, far more than a guest's credit. It
+// still covers almost every answer, reasoning included: over a week of production traffic on DeepSeek V4.1 Flash, answers
 // averaged about 1,100 output tokens and the longest was about 15,000
 // (2026-11-04).
 const DefaultGuestMaxOutputTokens = 8192
 
-// capOutput writes an output limit into a chat request: the client's own
-// limit when it is smaller, otherwise limit. Metering holds credit for that
-// limit and the provider enforces it, so an answer never costs more than its
-// hold and no request can run up a debt by leaving the limit unset. The
-// provider adapter still clamps it to the model's maximum.
+// capOutput writes an output limit into a guest's chat request: the guest's
+// own limit when it is smaller, otherwise limit. Metering holds credit for
+// that limit and the provider enforces it. Other accounts' requests are left
+// as sent: without max_tokens, Metering holds the model's maximum output.
 func capOutput(raw []byte, req domain.GenerateRequest, limit int) ([]byte, domain.GenerateRequest, error) {
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 && *req.MaxOutputTokens <= limit {
 		return raw, req, nil
@@ -51,12 +44,4 @@ func capOutput(raw []byte, req domain.GenerateRequest, limit int) ([]byte, domai
 	}
 	req.MaxOutputTokens = &limit
 	return rewritten, req, nil
-}
-
-// outputLimit is the output limit of a chat request from this account.
-func (s *GenerateService) outputLimit(account domain.Account) int {
-	if account.IsGuest {
-		return s.guestMaxOutputTokens
-	}
-	return DefaultMaxOutputTokens
 }

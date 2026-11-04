@@ -39,23 +39,22 @@ func sentField(t *testing.T, raw, field string) any {
 	return body[field]
 }
 
-// Every chat request reaches the provider with an output limit no larger than
-// its account's limit, and Metering holds credit for that limit: 32,768 for
-// accounts, the guest limit (50 here) for guests.
-func TestProxy_ChatRequestsCarryTheOutputLimit(t *testing.T) {
+// A guest's chat request reaches the provider with an output limit no larger
+// than the guest limit (50 here), and Metering holds credit for that limit.
+// Other accounts' requests keep their own limit, or none.
+func TestProxy_GuestChatRequestsCarryTheOutputLimit(t *testing.T) {
 	const user = `"messages":[{"role":"user","content":"hi"}]`
 	for name, tc := range map[string]struct {
 		guest       bool
 		body, field string
 		want        float64
 	}{
-		"guest, no limit":                {true, `{"model":"model",` + user + `}`, "max_completion_tokens", 50},
-		"guest, larger limit":            {true, `{"model":"model",` + user + `,"max_tokens":4000}`, "max_tokens", 50},
-		"guest, smaller limit is kept":   {true, `{"model":"model",` + user + `,"max_tokens":20}`, "max_tokens", 20},
-		"guest, max_completion_tokens":   {true, `{"model":"model",` + user + `,"max_completion_tokens":4000}`, "max_completion_tokens", 50},
-		"account, no limit":              {false, `{"model":"model",` + user + `}`, "max_completion_tokens", DefaultMaxOutputTokens},
-		"account, larger limit":          {false, `{"model":"model",` + user + `,"max_tokens":100000}`, "max_tokens", DefaultMaxOutputTokens},
-		"account, smaller limit is kept": {false, `{"model":"model",` + user + `,"max_tokens":80}`, "max_tokens", 80},
+		"guest, no limit":              {true, `{"model":"model",` + user + `}`, "max_completion_tokens", 50},
+		"guest, larger limit":          {true, `{"model":"model",` + user + `,"max_tokens":4000}`, "max_tokens", 50},
+		"guest, smaller limit is kept": {true, `{"model":"model",` + user + `,"max_tokens":20}`, "max_tokens", 20},
+		"guest, max_completion_tokens": {true, `{"model":"model",` + user + `,"max_completion_tokens":4000}`, "max_completion_tokens", 50},
+		"account, limit kept":          {false, `{"model":"model",` + user + `,"max_tokens":100000}`, "max_tokens", 100000},
+		"account, small limit kept":    {false, `{"model":"model",` + user + `,"max_tokens":80}`, "max_tokens", 80},
 	} {
 		t.Run(name, func(t *testing.T) {
 			meter, provider := &stubUsageMeter{}, &stubProvider{}
@@ -78,5 +77,19 @@ func TestProxy_GuestRequestsAreOtherwiseOrdinary(t *testing.T) {
 	proxyChat(t, newGuestTestService(meter, provider, true), body)
 	if sentField(t, provider.lastRaw, "tools") == nil {
 		t.Fatal("a guest's tools were dropped")
+	}
+
+	// A signed-in request without a limit goes upstream without one, and
+	// Metering holds the model's maximum output.
+	meter, provider = &stubUsageMeter{}, &stubProvider{}
+	proxyChat(t, newGuestTestService(meter, provider, false), body)
+	if got := sentField(t, provider.lastRaw, "max_tokens"); got != nil {
+		t.Fatalf("a signed-in request got max_tokens %v", got)
+	}
+	if got := sentField(t, provider.lastRaw, "max_completion_tokens"); got != nil {
+		t.Fatalf("a signed-in request got max_completion_tokens %v", got)
+	}
+	if meter.lastReserveReq.MaxOutputTokens != nil {
+		t.Fatalf("a signed-in request's hold got an output limit: %d", *meter.lastReserveReq.MaxOutputTokens)
 	}
 }

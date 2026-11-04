@@ -121,11 +121,9 @@ func TestEstimateInputTokens_SystemOneHasNoBound(t *testing.T) {
 func TestProxy_SendsThePromptEstimateWithTheHold(t *testing.T) {
 	meter := &stubUsageMeter{}
 	svc := newDirectModelGenerateService(meter, &stubProvider{})
-	// The request sets its own output limit, so the body goes upstream as sent.
-	body := `{"model":"model","messages":[{"role":"user","content":"hello"}],"max_tokens":100}`
-	maxTokens := 100
+	body := `{"model":"model","messages":[{"role":"user","content":"hello"}]}`
 
-	if _, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(body), domain.GenerateRequest{PublicModelID: "model", MaxOutputTokens: &maxTokens}, "sk-test"); err != nil {
+	if _, err := svc.Proxy(context.Background(), domain.EndpointChatCompletions, []byte(body), domain.GenerateRequest{PublicModelID: "model"}, "sk-test"); err != nil {
 		t.Fatalf("Proxy: %v", err)
 	}
 	estimate := meter.lastReserveReq.EstimatedInputTokens
