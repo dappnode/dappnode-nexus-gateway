@@ -16,6 +16,7 @@ func newGuestTestService(meter *stubUsageMeter, provider *stubProvider, isGuest 
 		APIKey:  domain.APIKey{ID: "key1", Active: true},
 	}}
 	svc.SetGuestMaxOutputTokens(50)
+	svc.catalog.(*stubModelCatalog).model.GuestAllowed = true
 	return svc
 }
 

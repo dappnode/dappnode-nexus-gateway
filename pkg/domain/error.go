@@ -35,6 +35,7 @@ const (
 	ErrCodeUnknownField            = "unknown_field"
 	ErrCodeInsufficientBalance     = "insufficient_balance"
 	ErrCodeDailyTokenLimit         = "daily_token_limit_exceeded"
+	ErrCodeGuestModelNotAllowed    = "guest_model_not_allowed"
 	ErrCodeConfidentialLimit       = "confidential_request_limit_exceeded"
 	ErrCodeClientCanceled          = "client_canceled"
 	ErrCodeInternalError           = "internal_error"
@@ -91,6 +92,13 @@ func (e *GatewayError) LogFields() []any {
 
 func ErrInvalidAPIKey(msg string) *GatewayError {
 	return &GatewayError{HTTPStatus: 401, Type: ErrTypeAuthentication, Code: ErrCodeInvalidAPIKey, Message: msg}
+}
+
+// ErrGuestModelNotAllowed refuses a guest chat key a model or endpoint that
+// is not open to guests (public_models.guest_allowed).
+func ErrGuestModelNotAllowed(model string) *GatewayError {
+	return &GatewayError{HTTPStatus: 403, Type: ErrTypePermission, Code: ErrCodeGuestModelNotAllowed,
+		Message: fmt.Sprintf("Guest chat can't use '%s'. Sign up for free to use every model.", model)}
 }
 
 func ErrUnsupportedModel(model string) *GatewayError {

@@ -358,6 +358,7 @@ func (m runtimePublicModel) toDomain() domain.PublicModel {
 		OutputPricePerMillion:   priceFromMicrocents(*m.OutputPricePer1MTokensMicrocents),
 		Currency:                m.Currency,
 		Active:                  m.Active,
+		GuestAllowed:            m.GuestAllowed,
 	}
 	if m.Fallback != nil {
 		model.Fallback = &domain.ProviderTarget{
@@ -453,6 +454,7 @@ type runtimePublicModel struct {
 	CacheWritePricePer1MTokensMicrocents *int64                 `json:"cache_write_price_per_1m_tokens_microcents,omitempty"`
 	Currency                             string                 `json:"currency"`
 	Active                               bool                   `json:"active"`
+	GuestAllowed                         bool                   `json:"guest_allowed"`
 }
 
 type runtimeProviderTarget struct {

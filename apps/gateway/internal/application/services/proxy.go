@@ -56,8 +56,13 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		}
 		return domain.Annotate(err, "account_id", authCtx.Account.ID, "model", model.PublicModelID, "provider", model.ProviderConfig.ProviderName)
 	}
-	if authCtx.Account.IsGuest && endpoint == domain.EndpointChatCompletions {
-		if raw, req, err = capOutput(raw, req, s.guestMaxOutputTokens); err != nil {
+	if authCtx.Account.IsGuest {
+		err := s.checkGuestModel(ctx, endpoint, req.PublicModelID)
+		if err == nil {
+			raw, req, err = capOutput(raw, req, s.guestMaxOutputTokens)
+		}
+		if err != nil {
+			err = clientGone(ctx, err)
 			s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
 			s.recordError(endpoint, req, nil, metrics.PhaseRequest, err)
 			return nil, reject(err, nil)

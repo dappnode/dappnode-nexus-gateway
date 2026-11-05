@@ -140,8 +140,11 @@ metadata, provider options, and image/audio content are not scanned. Keep
 personal data out of those fields even when masking is enabled.
 
 Guest chat accounts (flagged `is_guest` by Metering; a landing-page visitor
-with a small credit and no login) are ordinary accounts with one difference:
-their chat requests always carry an output limit of at most
+with a small credit and no login) are ordinary accounts with two differences.
+They can call only chat completions on models an operator ticked "Guests can
+use this model" (`guest_allowed` from Metering); any other model or router is
+refused with `guest_model_not_allowed` before routing, PII masking or Metering
+run. And their chat requests always carry an output limit of at most
 `GUEST_MAX_OUTPUT_TOKENS` (default 8192), written into the request so the
 provider enforces it. Metering holds credit for that limit, so a guest's hold
 fits its credit; other requests without `max_tokens` hold the model's maximum
