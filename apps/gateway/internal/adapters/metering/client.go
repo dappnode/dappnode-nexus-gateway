@@ -58,6 +58,7 @@ func (c *Client) Reserve(ctx context.Context, auth domain.AuthContext, endpoint 
 		FallbackUsed:           req.FallbackUsed,
 		Stream:                 req.Stream,
 		MaxOutputTokens:        req.MaxOutputTokens,
+		EstimatedInputTokens:   req.EstimatedInputTokens,
 	}
 	var res reserveResponse
 	sent := time.Now() // A lease measured from here never outlasts Metering's.
@@ -420,6 +421,7 @@ type reserveRequest struct {
 	FallbackUsed           *bool                         `json:"fallback_used,omitempty"`
 	Stream                 bool                          `json:"stream"`
 	MaxOutputTokens        *int                          `json:"max_output_tokens,omitempty"`
+	EstimatedInputTokens   *int64                        `json:"estimated_input_tokens,omitempty"`
 }
 
 type reserveResponse struct {

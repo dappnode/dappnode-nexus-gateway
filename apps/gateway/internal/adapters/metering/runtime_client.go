@@ -33,6 +33,7 @@ func (c *Client) AuthenticateAPIKey(ctx context.Context, rawKey string) (domain.
 			ID:                 response.Account.ID,
 			ExternalCustomerID: response.Account.ExternalCustomerID,
 			Status:             response.Account.Status,
+			IsGuest:            response.Account.IsGuest,
 		},
 		APIKey: domain.APIKey{
 			ID:         response.APIKey.ID,
@@ -357,6 +358,7 @@ func (m runtimePublicModel) toDomain() domain.PublicModel {
 		OutputPricePerMillion:   priceFromMicrocents(*m.OutputPricePer1MTokensMicrocents),
 		Currency:                m.Currency,
 		Active:                  m.Active,
+		GuestAllowed:            m.GuestAllowed,
 	}
 	if m.Fallback != nil {
 		model.Fallback = &domain.ProviderTarget{
@@ -413,6 +415,7 @@ type runtimeAccount struct {
 	ID                 string  `json:"id"`
 	ExternalCustomerID *string `json:"external_customer_id,omitempty"`
 	Status             string  `json:"status"`
+	IsGuest            bool    `json:"is_guest"`
 }
 
 type runtimeAPIKey struct {
@@ -451,6 +454,7 @@ type runtimePublicModel struct {
 	CacheWritePricePer1MTokensMicrocents *int64                 `json:"cache_write_price_per_1m_tokens_microcents,omitempty"`
 	Currency                             string                 `json:"currency"`
 	Active                               bool                   `json:"active"`
+	GuestAllowed                         bool                   `json:"guest_allowed"`
 }
 
 type runtimeProviderTarget struct {

@@ -26,6 +26,8 @@ type GenerateService struct {
 	piiFailOpen   bool
 	tinfoilProofs ports.TinfoilTransportProofRepository
 	logger        ports.Logger
+	// guestMaxOutputTokens is the output limit of guest chat requests.
+	guestMaxOutputTokens int
 }
 
 func NewGenerateService(
@@ -46,6 +48,8 @@ func NewGenerateService(
 		pii:      pii,
 		piiLang:  "en",
 		logger:   logger,
+
+		guestMaxOutputTokens: DefaultGuestMaxOutputTokens,
 	}
 }
 
@@ -56,6 +60,12 @@ func (s *GenerateService) SetPIIOptions(language string, failOpen bool) {
 		s.piiLang = language
 	}
 	s.piiFailOpen = failOpen
+}
+
+// SetGuestMaxOutputTokens sets the output limit of guest chat requests; see
+// capOutput.
+func (s *GenerateService) SetGuestMaxOutputTokens(limit int) {
+	s.guestMaxOutputTokens = limit
 }
 
 func (s *GenerateService) SetTinfoilProofRepository(proofs ports.TinfoilTransportProofRepository) {

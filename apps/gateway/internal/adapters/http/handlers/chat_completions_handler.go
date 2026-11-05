@@ -1,11 +1,9 @@
 package handlers
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/mapper"
@@ -15,10 +13,6 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/services"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/domain"
 )
-
-// Bound the wait for usage after generation has finished, without extending
-// the lifetime of requests canceled before completion.
-const streamUsageDrainTimeout = 5 * time.Second
 
 // ChatCompletionsHandler handles POST /v1/chat/completions.
 type ChatCompletionsHandler struct {
@@ -50,27 +44,16 @@ func (h *ChatCompletionsHandler) Handle(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// The gateway is a proxy: the request goes upstream as the client sent it
-	// and the provider's response comes back as it came.
-	upstream, cancelUpstream := context.WithCancel(context.WithoutCancel(r.Context()))
-	defer cancelUpstream()
-	var finished atomic.Bool
-	stopWatch := context.AfterFunc(r.Context(), func() {
-		// A client gone after the finish reason still gets its usage metered:
-		// the upstream is drained briefly instead of cut off.
-		if finished.Load() {
-			time.AfterFunc(streamUsageDrainTimeout, cancelUpstream)
-			return
-		}
-		cancelUpstream()
-	})
-	defer stopWatch()
-	call, err := h.service.Proxy(upstream, body, genReq, token)
+	// and the provider's response comes back as it came. Once the provider
+	// runs, a client that hangs up no longer stops it (see Proxy): the relay
+	// keeps reading to the end, where the usage to charge arrives.
+	call, err := h.service.Proxy(r.Context(), body, genReq, token)
 	if err != nil {
 		WriteErrorWithLog(w, r, h.logger, err)
 		return
 	}
 	if call.Stream != nil {
-		h.relay(w, r, call.Stream, &finished)
+		h.relay(w, r, call.Stream)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -81,7 +64,7 @@ func (h *ChatCompletionsHandler) Handle(w http.ResponseWriter, r *http.Request) 
 // relay sends a provider's stream to the client line by line, as it came.
 // Keep-alive comments fill long silences (slow reasoning), and a stream the
 // provider finished without [DONE] gets one, so every client sees an end.
-func (h *ChatCompletionsHandler) relay(w http.ResponseWriter, r *http.Request, stream *services.ProxyStream, finished *atomic.Bool) {
+func (h *ChatCompletionsHandler) relay(w http.ResponseWriter, r *http.Request, stream *services.ProxyStream) {
 	defer stream.Close()
 	sw, err := sse.NewWriter(w)
 	if err != nil {
@@ -123,9 +106,6 @@ func (h *ChatCompletionsHandler) relay(w http.ResponseWriter, r *http.Request, s
 		if err != nil {
 			readErr = err
 			break
-		}
-		if stream.Finished() {
-			finished.Store(true)
 		}
 		write(line)
 	}

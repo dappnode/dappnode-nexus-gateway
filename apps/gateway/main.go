@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -93,6 +94,11 @@ func main() {
 	generateSvc := services.NewGenerateService(authService, modelCatalog, routerClient, providerRegistry, meteringClient, piiFilter, zapLogger)
 	generateSvc.SetPIIOptions(piiLang, piiFailOpen)
 	generateSvc.SetTinfoilProofRepository(tinfoilProofRepo)
+	guestMaxOutput, err := positiveIntEnv("GUEST_MAX_OUTPUT_TOKENS", services.DefaultGuestMaxOutputTokens)
+	if err != nil {
+		log.Fatalf("invalid guest chat configuration: %v", err)
+	}
+	generateSvc.SetGuestMaxOutputTokens(guestMaxOutput)
 	chatCompletionsSvc := services.NewChatCompletionsService(generateSvc, zapLogger)
 
 	healthHandler := handlers.NewHealthHandler()
@@ -246,4 +252,18 @@ func buildPIIFilter(log *logger.ZapLogger) (ports.PIIFilter, string, bool) {
 		Timeout:         timeout,
 		Logger:          log,
 	}), language, failOpen
+}
+
+// positiveIntEnv reads a positive whole number from the environment. A set but
+// invalid value is an error, so a typo cannot silently loosen a limit.
+func positiveIntEnv(name string, fallback int) (int, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s must be a positive whole number", name)
+	}
+	return n, nil
 }

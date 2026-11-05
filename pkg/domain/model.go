@@ -53,6 +53,9 @@ type PublicModel struct {
 	CacheWritePricePerMillion *decimal.Decimal
 	Currency                  string
 	Active                    bool
+	// GuestAllowed marks a model guest chat keys may call; they can call no
+	// other model or router.
+	GuestAllowed bool
 }
 
 func (m PublicModel) EffectiveProofMode() string {
