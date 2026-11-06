@@ -99,6 +99,15 @@ func main() {
 		log.Fatalf("invalid guest chat configuration: %v", err)
 	}
 	generateSvc.SetGuestMaxOutputTokens(guestMaxOutput)
+	imageTimeout, err := timeoutSeconds("IMAGE_GENERATION_TIMEOUT_SECONDS", services.DefaultImageTimeout)
+	if err != nil {
+		log.Fatalf("invalid image generation configuration: %v", err)
+	}
+	imageJobs, err := positiveIntEnv("IMAGE_GENERATION_CONCURRENCY_PER_ACCOUNT", services.DefaultImageConcurrency)
+	if err != nil {
+		log.Fatalf("invalid image generation configuration: %v", err)
+	}
+	generateSvc.SetImageOptions(imageTimeout, imageJobs)
 	chatCompletionsSvc := services.NewChatCompletionsService(generateSvc, zapLogger)
 
 	healthHandler := handlers.NewHealthHandler()
@@ -141,7 +150,7 @@ func main() {
 		}
 	}
 
-	router := gwhttp.NewRouter(healthHandler, modelsHandler, chatHandler, handlers.NewSystemOneHandler(generateSvc, zapLogger), confidentialChatHandler, tinfoilHandler, attestationHandler, zapLogger)
+	router := gwhttp.NewRouter(healthHandler, modelsHandler, chatHandler, handlers.NewImageGenerationsHandler(generateSvc, zapLogger), handlers.NewSystemOneHandler(generateSvc, zapLogger), confidentialChatHandler, tinfoilHandler, attestationHandler, zapLogger)
 	router = middleware.ReadTimeout(transportTimeouts.ClientIO)(middleware.WriteTimeout(transportTimeouts.ClientIO)(router))
 
 	metricsMux := http.NewServeMux()

@@ -32,7 +32,7 @@ func (a *Adapter) logProviderRequest(ctx context.Context, model domain.PublicMod
 func summarizeProviderBody(body map[string]any) map[string]any {
 	// Only fixed keys and numeric/boolean settings: arbitrary strings can contain prompts.
 	summary := map[string]any{}
-	for _, key := range []string{"stream", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "seed", "logprobs", "top_logprobs", "parallel_tool_calls", "store"} {
+	for _, key := range []string{"stream", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "seed", "logprobs", "top_logprobs", "parallel_tool_calls", "store", "n"} {
 		switch value := body[key].(type) {
 		case bool, int, int32, int64, float32, float64:
 			summary[key] = value

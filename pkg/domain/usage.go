@@ -7,4 +7,6 @@ type Usage struct {
 	TotalTokens         int64 `json:"total_tokens"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 	CacheReadTokens     int64 `json:"cache_read_tokens"`
+	// Images is how many images an image generation returned.
+	Images int64 `json:"images,omitempty"`
 }
