@@ -29,13 +29,20 @@ const (
 
 type idempotencyStore struct {
 	mu          sync.Mutex
-	entries     map[[32]byte]*idempotentRequest
+	entries     map[idempotencyKey]*idempotentRequest
 	replayBytes int64
 	now         func() time.Time
 }
 
+// Retry keys are scoped to an authenticated account, not used as credentials.
+// Keep the two fields separate so lookup compares the exact pair.
+type idempotencyKey struct {
+	accountID string
+	retryKey  string
+}
+
 type idempotentRequest struct {
-	key      [32]byte
+	key      idempotencyKey
 	bodyHash [32]byte
 	done     bool
 	result   []byte    // Replayable result, while kept.
@@ -44,7 +51,7 @@ type idempotentRequest struct {
 }
 
 func newIdempotencyStore() *idempotencyStore {
-	return &idempotencyStore{entries: map[[32]byte]*idempotentRequest{}, now: time.Now}
+	return &idempotencyStore{entries: map[idempotencyKey]*idempotentRequest{}, now: time.Now}
 }
 
 // begin claims key for a request. It returns the stored result when the key
@@ -54,7 +61,7 @@ func (s *idempotencyStore) begin(accountID, key string, body []byte) (*idempoten
 	if len(key) > maxIdempotencyKeyLen {
 		return nil, nil, domain.ErrInvalidField("Idempotency-Key must be at most 255 characters")
 	}
-	id := sha256.Sum256([]byte(accountID + "\x00" + key))
+	id := idempotencyKey{accountID: accountID, retryKey: key}
 	bodyHash := sha256.Sum256(canonicalJSON(body))
 	s.mu.Lock()
 	defer s.mu.Unlock()
