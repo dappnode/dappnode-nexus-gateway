@@ -18,6 +18,14 @@ type Provider interface {
 	Complete(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error)
 }
 
+// ImageProvider generates images through the OpenAI images API. A provider
+// adapter that doesn't implement it can't serve image models.
+type ImageProvider interface {
+	// GenerateImages sends an images/generations request and returns the
+	// provider's JSON, with the images inline.
+	GenerateImages(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, error)
+}
+
 // ProviderStream is an upstream streaming response.
 type ProviderStream struct {
 	Body io.ReadCloser

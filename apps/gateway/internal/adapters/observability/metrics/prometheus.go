@@ -99,6 +99,14 @@ var (
 		},
 		[]string{"direction", "model", "provider"},
 	)
+
+	ImagesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "nexus_gateway_images_total",
+			Help: "Total images generated, by model and provider.",
+		},
+		[]string{"model", "provider"},
+	)
 )
 
 // Downstream dependency metrics.
@@ -263,6 +271,7 @@ func init() {
 		UpstreamLatency,
 		TokensTotal,
 		CacheTokensTotal,
+		ImagesTotal,
 		MeteringRequests,
 		MeteringDuration,
 		RouterRequests,
@@ -303,5 +312,8 @@ func RecordUsage(u *domain.Usage, model, provider string) {
 	}
 	if v := u.CacheCreationTokens; v > 0 {
 		CacheTokensTotal.WithLabelValues("write", model, provider).Add(float64(v))
+	}
+	if v := u.Images; v > 0 {
+		ImagesTotal.WithLabelValues(model, provider).Add(float64(v))
 	}
 }

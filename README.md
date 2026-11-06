@@ -69,6 +69,7 @@ print(response.choices[0].message.content)
 | --- | --- |
 | `GET /v1/models` | Lists the available models, prices and capabilities. |
 | `POST /v1/chat/completions` | Creates chat completions; supports streaming. |
+| `POST /v1/images/generations` | Generates images with image models (OpenAI images API, inline `b64_json` only, priced per image, `Idempotency-Key` supported). |
 
 Supported capabilities depend on the selected model and can include streaming,
 tool calls, parallel tool calls, structured outputs and reasoning. The current
@@ -90,6 +91,16 @@ keep a valid `Retry-After` header. Errors include `origin` (`gateway` or
 `upstream`) and, when known, the numeric `upstream_status`; other diagnostic
 details are not exposed. A configured fallback provider is tried only after a
 rate limit or a server-side failure, never after a rejected request.
+
+Image generation follows the OpenAI images API: `model`, `prompt`, and `n`
+(1 to 4). Images come back inline as `b64_json` and are not stored; a prompt
+the provider refuses returns 422 `content_policy_violation` and costs
+nothing. Send an `Idempotency-Key` header to retry safely: a retry of a
+finished request returns the same images without a second charge.
+`IMAGE_GENERATION_TIMEOUT_SECONDS` (default 120) bounds one generation and
+`IMAGE_GENERATION_CONCURRENCY_PER_ACCOUNT` (default 2) how many one account
+runs at once. Operator notes are in the Nexus repository's
+`docs/image-generation.md`.
 
 Responses have no limit on total duration. Two stall guards apply instead:
 `PROVIDER_SILENCE_TIMEOUT_SECONDS` (default 900) ends a request when the

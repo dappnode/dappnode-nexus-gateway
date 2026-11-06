@@ -29,6 +29,9 @@ type ModelData struct {
 	OutputPricePer1MTokensUSD       *float64 `json:"output_price_per_1m_tokens_usd,omitempty"`
 	CacheReadPricePer1MTokensUSD    *float64 `json:"cache_read_price_per_1m_tokens_usd,omitempty"`
 	CacheWritePricePer1MTokensUSD   *float64 `json:"cache_write_price_per_1m_tokens_usd,omitempty"`
+	// Image models are priced per image. Cents may have decimals.
+	PricePerImageCents *float64 `json:"price_per_image_cents,omitempty"`
+	PricePerImageUSD   *float64 `json:"price_per_image_usd,omitempty"`
 	// Capabilities is what the operator states the model accepts, using
 	// models.dev field names. A missing field means not stated.
 	Capabilities  json.RawMessage `json:"capabilities,omitempty"`
