@@ -140,13 +140,13 @@ func eurToCents(price decimal.Decimal) int64 {
 	return price.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
 }
 
-// fractionalCents is a price in cents to 4 decimals: per-image prices are
+// fractionalCents is a price in cents to microcent precision: per-image prices are
 // often fractions of a cent.
 func fractionalCents(price *decimal.Decimal) *float64 {
 	if price == nil {
 		return nil
 	}
-	cents, _ := price.Mul(decimal.NewFromInt(100)).Round(4).Float64()
+	cents, _ := price.Mul(decimal.NewFromInt(100)).Round(6).Float64()
 	return &cents
 }
 
@@ -176,7 +176,7 @@ func priceToUSDPtr(currency string, price decimal.Decimal, eurToUSDRate float64)
 	if factor <= 0 {
 		return nil
 	}
-	usd, _ := price.Mul(decimal.NewFromFloat(factor)).Round(4).Float64()
+	usd, _ := price.Mul(decimal.NewFromFloat(factor)).Round(8).Float64()
 	return &usd
 }
 

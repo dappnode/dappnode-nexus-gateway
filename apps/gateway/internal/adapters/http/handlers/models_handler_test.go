@@ -47,3 +47,11 @@ func TestToPublicModelData_ImageModel(t *testing.T) {
 		t.Fatal("an image model publishes no context size or token prices")
 	}
 }
+
+func TestToPublicModelData_ImagePricePreservesMicrocents(t *testing.T) {
+	price := decimal.RequireFromString("0.00360083")
+	data := toPublicModelData(domain.PublicModel{Currency: "EUR", SupportsImageGenerations: true, PricePerImage: &price}, 1)
+	if data.PricePerImageCents == nil || *data.PricePerImageCents != 0.360083 {
+		t.Fatalf("price = %v, want 0.360083 cents", data.PricePerImageCents)
+	}
+}
