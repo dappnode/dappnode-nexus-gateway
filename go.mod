@@ -1,6 +1,6 @@
 module github.com/dappnode/dappnode-nexus-gateway
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/0xsequence/nsm v0.1.0
