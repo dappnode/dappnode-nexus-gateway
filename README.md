@@ -69,7 +69,7 @@ print(response.choices[0].message.content)
 | --- | --- |
 | `GET /v1/models` | Lists the available models, prices and capabilities. |
 | `POST /v1/chat/completions` | Creates chat completions; supports streaming. |
-| `POST /v1/images/generations` | Generates images with image models (OpenAI images API, inline `b64_json` only, priced per image, `Idempotency-Key` supported). |
+| `POST /v1/images/generations` | Generates images with image models (OpenAI images API, inline `b64_json` only; Image-01 per image, H3 per token; `Idempotency-Key` supported). |
 
 Supported capabilities depend on the selected model and can include streaming,
 tool calls, parallel tool calls, structured outputs and reasoning. The current
@@ -161,3 +161,18 @@ provider enforces it. Metering holds credit for that limit, so a guest's hold
 fits its credit; other requests without `max_tokens` hold the model's maximum
 output. An invalid value stops the gateway at startup. The Nexus repository's
 `docs/guest-chat.md` describes guest chat.
+
+### Image billing
+
+Image-01 uses a fixed retail price per successful image. H3 uses separate retail
+rates for text input, reference-image input and image output tokens. Model discovery
+publishes `image_input_price_per_1m_tokens_cents` alongside text-input/output rates,
+and `image_max_cost_per_image_cents` for the maximum base charge and credit hold.
+Exact token counts are validated from MiniMax usage and sent privately to metering.
+Provider token costs remain independent of retail prices.
+
+Successful responses include `nexus_billing: {"charged_cents": 4.3, "currency": "EUR"}`
+when metering returns a charge receipt. It is the amount actually deducted, including
+any prepaid surcharge. Idempotent replays include the same receipt without charging
+again. Failed/refused requests have no retail charge. Billing uses the rates and
+ceiling saved when the hold was admitted; completion releases the unused hold.

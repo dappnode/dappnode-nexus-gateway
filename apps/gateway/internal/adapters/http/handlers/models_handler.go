@@ -74,6 +74,9 @@ func toPublicModelData(m domain.PublicModel, eurToUSDRate float64) dto.ModelData
 		CacheReadPricePer1MTokensUSD:    pricePtrToUSDPtr(m.Currency, m.CacheReadPricePerMillion, eurToUSDRate),
 		CacheWritePricePer1MTokensUSD:   pricePtrToUSDPtr(m.Currency, m.CacheWritePricePerMillion, eurToUSDRate),
 		PricePerImageCents:              fractionalCents(m.PricePerImage),
+		ImageInputPricePer1MTokensCents: eurPtrToCentsPtr(m.ImageInputPricePerMillion),
+		ImageInputPricePer1MTokensUSD:   pricePtrToUSDPtr(m.Currency, m.ImageInputPricePerMillion, eurToUSDRate),
+		ImageMaxCostPerImageCents:       fractionalCents(m.ImageMaxCostPerImage),
 		PricePerImageUSD:                pricePtrToUSDPtr(m.Currency, m.PricePerImage, eurToUSDRate),
 		Capabilities:                    publishedCapabilities(m),
 		Endpoints:                       modelEndpoints(m),
@@ -81,10 +84,13 @@ func toPublicModelData(m domain.PublicModel, eurToUSDRate float64) dto.ModelData
 		ProofsEnabled:                   domain.ProofModeEnabled(proofMode),
 	}
 	if !m.SupportsChatCompletions && m.SupportsEndpoint(domain.EndpointImageGenerations) {
-		// An image model has no context or token prices.
+		// Image requests have no chat token limits; token-priced image models
+		// still publish their retail text/reference/output rates.
 		data.ContextSize, data.MaxOutputTokens = nil, nil
-		data.InputPricePer1MTokensCents, data.OutputPricePer1MTokensCents = nil, nil
-		data.InputPricePer1MTokensUSD, data.OutputPricePer1MTokensUSD = nil, nil
+		if m.ImageInputPricePerMillion == nil {
+			data.InputPricePer1MTokensCents, data.OutputPricePer1MTokensCents = nil, nil
+			data.InputPricePer1MTokensUSD, data.OutputPricePer1MTokensUSD = nil, nil
+		}
 	}
 	return data
 }

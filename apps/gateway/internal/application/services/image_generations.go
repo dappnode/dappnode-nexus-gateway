@@ -210,6 +210,15 @@ func (s *GenerateService) generateImages(ctx context.Context, authCtx domain.Aut
 		}
 		_ = json.Unmarshal(providerBody, &upstream)
 		usage.ProviderUsage = upstream.Usage
+		if model.ImageInputPricePerMillion != nil {
+			normalized, ok := domain.ParseImageTokenUsage(upstream.Usage, count)
+			if !ok {
+				err := domain.ErrProviderError(http.StatusBadGateway, "provider returned missing or inconsistent image token usage")
+				s.recordFailure(ctx, &reservationID, &authCtx, endpoint, &req, &model, err, nil, latencyMs)
+				return nil, err
+			}
+			usage = &normalized
+		}
 	}
 	result := domain.GenerateResult{
 		PublicModelID: executed.PublicModelID, ProviderName: executed.ProviderConfig.ProviderName,
@@ -222,8 +231,21 @@ func (s *GenerateService) generateImages(ctx context.Context, authCtx domain.Aut
 		"endpoint", endpoint, "model", req.PublicModelID, "provider", executed.ProviderConfig.ProviderName,
 		"provider_model", executed.UpstreamModelName, "images_requested", req.Images, "images", count,
 		"latency_ms", latencyMs, "gateway_status", 200, "upstream_status", 200)
-	if err := s.metering.RecordSuccess(context.WithoutCancel(ctx), reservationID, authCtx, endpoint, req, result, executed, latencyMs); err != nil {
+	var charged *int64
+	if receipts, ok := s.metering.(ports.UsageReceiptMeter); ok {
+		charged, err = receipts.CompleteWithReceipt(context.WithoutCancel(ctx), reservationID, result, executed, latencyMs)
+	} else {
+		err = s.metering.RecordSuccess(context.WithoutCancel(ctx), reservationID, authCtx, endpoint, req, result, executed, latencyMs)
+	}
+	if err != nil {
 		s.logger.Error("failed to record usage", "request_id", requestID, "reservation_id", reservationID, "error_type", fmt.Sprintf("%T", err))
+	}
+	if charged != nil {
+		var response map[string]json.RawMessage
+		if json.Unmarshal(body, &response) == nil {
+			response["nexus_billing"], _ = json.Marshal(map[string]any{"charged_cents": float64(*charged) / 1_000_000, "currency": "EUR"})
+			body, _ = json.Marshal(response)
+		}
 	}
 	return &ImageCall{Model: executed, Body: body}, nil
 }
@@ -252,6 +274,7 @@ func readImageResponse(body []byte, requested *int) ([]byte, int64, error) {
 		return nil, 0, domain.ErrProviderError(http.StatusBadGateway, "provider returned more images than requested")
 	}
 	delete(resp, "usage")
+	delete(resp, "nexus_billing")
 	out, err := json.Marshal(resp)
 	if err != nil {
 		return nil, 0, domain.ErrInternal("an internal error occurred").WithMeta("reason", "re-encode image response")

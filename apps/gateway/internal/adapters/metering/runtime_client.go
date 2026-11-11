@@ -216,6 +216,8 @@ func validateRuntimePublicModel(model runtimePublicModel, expectedPublicModelID 
 		return runtimeContractError("public model", "token limits must not be negative")
 	case model.SupportsImageGenerations && model.PricePerImageMicrocents != nil && *model.PricePerImageMicrocents < 0:
 		return runtimeContractError("public model", "price per image must not be negative")
+	case model.ImageInputPricePer1MTokensMicrocents != nil && (*model.ImageInputPricePer1MTokensMicrocents < 0 || model.ImageMaxCostPerImageMicrocents == nil || *model.ImageMaxCostPerImageMicrocents <= 0 || model.PricePerImageMicrocents != nil):
+		return runtimeContractError("public model", "image token prices require a non-negative reference rate and a positive spending ceiling without a fixed image price")
 	case model.InputPricePer1MTokensMicrocents == nil:
 		return runtimeContractError("public model", "input price is required")
 	case *model.InputPricePer1MTokensMicrocents < 0:
@@ -393,6 +395,14 @@ func (m runtimePublicModel) toDomain() domain.PublicModel {
 		price := priceFromMicrocents(*m.PricePerImageMicrocents)
 		model.PricePerImage = &price
 	}
+	if m.ImageInputPricePer1MTokensMicrocents != nil {
+		v := priceFromMicrocents(*m.ImageInputPricePer1MTokensMicrocents)
+		model.ImageInputPricePerMillion = &v
+	}
+	if m.ImageMaxCostPerImageMicrocents != nil {
+		v := priceFromMicrocents(*m.ImageMaxCostPerImageMicrocents)
+		model.ImageMaxCostPerImage = &v
+	}
 	model.SupportsImageGenerations = m.SupportsImageGenerations
 	return model
 }
@@ -469,6 +479,8 @@ type runtimePublicModel struct {
 	OutputPricePer1MTokensMicrocents     *int64          `json:"output_price_per_1m_tokens_microcents"`
 	CacheReadPricePer1MTokensMicrocents  *int64          `json:"cache_read_price_per_1m_tokens_microcents,omitempty"`
 	CacheWritePricePer1MTokensMicrocents *int64          `json:"cache_write_price_per_1m_tokens_microcents,omitempty"`
+	ImageInputPricePer1MTokensMicrocents *int64          `json:"image_input_price_per_1m_tokens_microcents,omitempty"`
+	ImageMaxCostPerImageMicrocents       *int64          `json:"image_max_cost_per_image_microcents,omitempty"`
 	PricePerImageMicrocents              *int64          `json:"price_per_image_microcents,omitempty"`
 	Currency                             string          `json:"currency"`
 	Active                               bool            `json:"active"`

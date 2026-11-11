@@ -42,7 +42,7 @@ type PublicModel struct {
 	ProviderConfig          ProviderConfig
 	Fallback                *ProviderTarget
 	SupportsChatCompletions bool // Routing: whether chat is served.
-	// SupportsImageGenerations marks an image model, priced per image.
+	// SupportsImageGenerations marks a model serving image requests.
 	SupportsImageGenerations bool
 	// Capabilities is the operator's description of the model, a JSON object
 	// published unchanged in /v1/models. Gateway never rejects requests by it.
@@ -54,10 +54,13 @@ type PublicModel struct {
 	OutputPricePerMillion     decimal.Decimal
 	CacheReadPricePerMillion  *decimal.Decimal
 	CacheWritePricePerMillion *decimal.Decimal
-	// PricePerImage is set on image models, in Currency.
-	PricePerImage *decimal.Decimal
-	Currency      string
-	Active        bool
+	// Image token rates use InputPricePerMillion for text and OutputPricePerMillion
+	// for generated images. PricePerImage is only for fixed-price image models.
+	ImageInputPricePerMillion *decimal.Decimal
+	ImageMaxCostPerImage      *decimal.Decimal
+	PricePerImage             *decimal.Decimal
+	Currency                  string
+	Active                    bool
 	// GuestAllowed marks a model guest chat keys may call; they can call no
 	// other model or router.
 	GuestAllowed bool
@@ -85,7 +88,7 @@ func (m PublicModel) SupportsEndpoint(endpoint string) bool {
 	case EndpointChatCompletions:
 		return m.SupportsChatCompletions
 	case EndpointImageGenerations:
-		return m.SupportsImageGenerations && m.PricePerImage != nil
+		return m.SupportsImageGenerations && (m.PricePerImage != nil || (m.SupportsImageEdits() && m.ImageInputPricePerMillion != nil && m.ImageMaxCostPerImage != nil))
 	default:
 		return false
 	}

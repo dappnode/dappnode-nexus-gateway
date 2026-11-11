@@ -412,3 +412,47 @@ func TestGenerateImagesRejectsOtherProvidersAndLegacyEdits(t *testing.T) {
 		})
 	}
 }
+
+type imageReceiptMeter struct{ imageMeter }
+
+func (m *imageReceiptMeter) CompleteWithReceipt(ctx context.Context, id string, result domain.GenerateResult, model domain.PublicModel, ms int64) (*int64, error) {
+	err := m.RecordSuccess(ctx, id, domain.AuthContext{}, domain.EndpointImageGenerations, domain.GenerateRequest{}, result, model, ms)
+	charged := int64(4_300_000)
+	return &charged, err
+}
+
+func TestGenerateH3ImagesBillsSeparateTokenDimensionsAndReplaysReceipt(t *testing.T) {
+	meter := &imageReceiptMeter{}
+	provider := &imageProvider{body: `{"data":[{"b64_json":"aGVsbG8="}],"usage":{"input_tokens":3000,"output_tokens":4000,"total_tokens":7000,"generated_images":1,"input_tokens_details":{"text_tokens":1000,"image_tokens":2000},"output_tokens_details":{"image_tokens":4000}}}`}
+	svc := newImageService(meter, provider, false)
+	model := imageModel()
+	model.UpstreamModelName = "MiniMax-H3-Image"
+	model.PricePerImage = nil
+	reference, ceiling := decimal.RequireFromString("3"), decimal.RequireFromString("0.50")
+	model.ImageInputPricePerMillion = &reference
+	model.ImageMaxCostPerImage = &ceiling
+	svc.catalog = &stubModelCatalog{model: model}
+	for i := 0; i < 2; i++ {
+		call, err := svc.GenerateImages(context.Background(), []byte(imageBody), imageRequest(1), "sk-test", "token-receipt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(call.Body), `"charged_cents":4.3`) || strings.Contains(string(call.Body), `"usage"`) {
+			t.Fatalf("response=%s", call.Body)
+		}
+	}
+	if len(meter.charged) != 1 {
+		t.Fatalf("charged %d times", len(meter.charged))
+	}
+	usage := meter.charged[0]
+	if usage.PromptTokens != 1000 || usage.ImageInputTokens != 2000 || usage.CompletionTokens != 4000 {
+		t.Fatalf("usage=%+v", usage)
+	}
+	provider.body = `{"data":[{"b64_json":"aGVsbG8="}],"usage":{}}`
+	if _, err := svc.GenerateImages(context.Background(), []byte(imageBody), imageRequest(1), "sk-test", "bad-usage"); err == nil {
+		t.Fatal("accepted missing token usage")
+	}
+	if len(meter.charged) != 1 {
+		t.Fatal("malformed usage charged the user")
+	}
+}

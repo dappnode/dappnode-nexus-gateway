@@ -5,6 +5,7 @@ import "encoding/json"
 // Usage holds token usage information for a generation.
 type Usage struct {
 	ProviderUsage       json.RawMessage `json:"provider_usage,omitempty"`
+	ImageInputTokens    int64           `json:"image_input_tokens,omitempty"`
 	PromptTokens        int64           `json:"prompt_tokens"`
 	CompletionTokens    int64           `json:"completion_tokens"`
 	TotalTokens         int64           `json:"total_tokens"`
