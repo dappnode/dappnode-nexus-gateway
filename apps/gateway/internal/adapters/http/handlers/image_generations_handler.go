@@ -28,7 +28,7 @@ func (h *ImageGenerationsHandler) Handle(w http.ResponseWriter, r *http.Request)
 		rejectRequest(w, r, h.logger, domain.EndpointImageGenerations, err)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<20))
 	if err != nil {
 		rejectRequest(w, r, h.logger, domain.EndpointImageGenerations, domain.ErrInvalidField("failed to read request body"))
 		return
@@ -36,6 +36,11 @@ func (h *ImageGenerationsHandler) Handle(w http.ResponseWriter, r *http.Request)
 	req, err := mapper.ImageGenerationRequestToDomain(body)
 	if err != nil {
 		rejectRequest(w, r, h.logger, domain.EndpointImageGenerations, err)
+		return
+	}
+	req.ImageEdit = r.URL.Path == "/v1/images/edits"
+	if req.ImageEdit != mapper.HasImageInputs(body) {
+		rejectRequest(w, r, h.logger, domain.EndpointImageGenerations, domain.ErrInvalidField("send reference images to /v1/images/edits; generations takes text only"))
 		return
 	}
 	call, err := h.service.GenerateImages(r.Context(), body, req, token, strings.TrimSpace(r.Header.Get("Idempotency-Key")))

@@ -36,6 +36,9 @@ func PrepareImageBody(raw []byte, model domain.PublicModel) (map[string]any, err
 // provider's JSON. The provider must return the images inline (b64_json).
 func (a *Adapter) GenerateImages(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, error) {
 	if strings.EqualFold(model.ProviderConfig.ProviderName, "minimax") {
+		if model.SupportsImageEdits() {
+			return a.generateMiniMaxH3Images(ctx, raw, model)
+		}
 		return a.generateMiniMaxImages(ctx, raw, model)
 	}
 	body, err := PrepareImageBody(raw, model)

@@ -27,6 +27,7 @@ func NewRouter(
 	mux.HandleFunc("POST /v1/chat/completions", chatCompletions.Handle)
 	if imageGenerations != nil {
 		mux.HandleFunc("POST /v1/images/generations", imageGenerations.Handle)
+		mux.HandleFunc("POST /v1/images/edits", imageGenerations.Handle)
 	}
 	if systemOne != nil {
 		mux.HandleFunc("POST /v1/systemone", systemOne.Handle)

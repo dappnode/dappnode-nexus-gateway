@@ -123,6 +123,9 @@ func modelEndpoints(m domain.PublicModel) []string {
 	}
 	if m.SupportsEndpoint(domain.EndpointImageGenerations) {
 		endpoints = append(endpoints, "images/generations")
+		if m.SupportsImageEdits() {
+			endpoints = append(endpoints, "images/edits")
+		}
 	}
 	return endpoints
 }

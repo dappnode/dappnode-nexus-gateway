@@ -64,7 +64,7 @@ func imageModel() domain.PublicModel {
 		PublicModelID:            "flux",
 		ProviderModelID:          "phala-flux",
 		UpstreamModelName:        "black-forest-labs/flux",
-		ProviderConfig:           domain.ProviderConfig{ProviderName: "phala"},
+		ProviderConfig:           domain.ProviderConfig{ProviderName: "minimax"},
 		SupportsImageGenerations: true,
 		PricePerImage:            &price,
 	}
@@ -78,7 +78,7 @@ func newImageService(meter ports.UsageMeter, provider ports.Provider, guest bool
 		}},
 		&stubModelCatalog{model: imageModel()},
 		nil,
-		&stubProviderRegistry{providers: map[string]ports.Provider{"phala": provider}},
+		&stubProviderRegistry{providers: map[string]ports.Provider{"minimax": provider}},
 		meter,
 		nil,
 		stubLogger{},
@@ -212,21 +212,20 @@ func TestGenerateImagesIdempotencyKeyInProgress(t *testing.T) {
 	}
 }
 
-func TestGenerateImagesFailedKeyCanBeRetried(t *testing.T) {
+func TestGenerateImagesFailedKeyCannotResubmitPossiblyBilledJob(t *testing.T) {
 	meter := &imageMeter{}
-	provider := &imageProvider{imageErr: domain.ErrProviderUnavailable("phala")}
+	provider := &imageProvider{imageErr: domain.ErrProviderUnavailable("minimax")}
 	svc := newImageService(meter, provider, false)
-
 	if _, err := svc.GenerateImages(context.Background(), []byte(imageBody), imageRequest(2), "sk", "key-3"); err == nil {
-		t.Fatal("want the provider's error")
+		t.Fatal("want provider error")
 	}
 	provider.imageErr = nil
 	provider.body = twoImages
-	if _, err := svc.GenerateImages(context.Background(), []byte(imageBody), imageRequest(2), "sk", "key-3"); err != nil {
-		t.Fatalf("a key whose request failed (and cost nothing) must be retryable: %v", err)
+	if _, err := svc.GenerateImages(context.Background(), []byte(imageBody), imageRequest(2), "sk", "key-3"); err == nil {
+		t.Fatal("must not resubmit ambiguous request")
 	}
-	if len(meter.charged) != 1 {
-		t.Fatalf("charged %d times, want once", len(meter.charged))
+	if provider.imageRuns != 1 || len(meter.charged) != 0 {
+		t.Fatal("retry submitted or charged")
 	}
 }
 
@@ -362,5 +361,54 @@ func TestIdempotencyKeyMatchesTheSameRequestFormattedDifferently(t *testing.T) {
 	}
 	if _, _, err := store.begin("acc", "k", []byte(`{"model":"m","prompt":"a fox","n":3}`)); err == nil {
 		t.Fatal("a different n is a different request")
+	}
+}
+
+func TestGenerateH3ImagesPreservesProviderUsageWithoutRetailTokens(t *testing.T) {
+	meter := &imageMeter{}
+	provider := &imageProvider{body: `{"data":[{"b64_json":"aGVsbG8="}],"usage":{"input_tokens_details":{"text_tokens":300,"image_tokens":2000},"output_tokens":4096}}`}
+	svc := newImageService(meter, provider, false)
+	model := imageModel()
+	model.UpstreamModelName = "MiniMax-H3-Image"
+	svc.catalog = &stubModelCatalog{model: model}
+	req := imageRequest(1)
+	req.ImageEdit = true
+	call, err := svc.GenerateImages(context.Background(), []byte(imageBody), req, "sk-test", "h3-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meter.charged) != 1 {
+		t.Fatalf("charged=%+v", meter.charged)
+	}
+	usage := meter.charged[0]
+	if usage.Images != 1 || usage.PromptTokens != 0 || usage.CompletionTokens != 0 || !strings.Contains(string(usage.ProviderUsage), `"image_tokens":2000`) {
+		t.Fatalf("retail/provider usage mixed: %+v", usage)
+	}
+	if strings.Contains(string(call.Body), `"usage"`) {
+		t.Fatal("provider usage leaked into retail response")
+	}
+}
+
+func TestGenerateImagesRejectsOtherProvidersAndLegacyEdits(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider string
+		edit           bool
+	}{
+		{"other provider", "phala", false}, {"legacy edit", "minimax", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			meter := &imageMeter{}
+			provider := &imageProvider{body: twoImages}
+			svc := newImageService(meter, provider, false)
+			model := imageModel()
+			model.ProviderConfig.ProviderName = tc.provider
+			svc.catalog = &stubModelCatalog{model: model}
+			req := imageRequest(1)
+			req.ImageEdit = tc.edit
+			_, err := svc.GenerateImages(context.Background(), []byte(imageBody), req, "sk-test", "")
+			if err == nil || meter.reserveCalls != 0 || provider.imageRuns != 0 {
+				t.Fatalf("request not rejected before billing: %v", err)
+			}
+		})
 	}
 }

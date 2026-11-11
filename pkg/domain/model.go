@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/shopspring/decimal"
 )
@@ -88,4 +89,10 @@ func (m PublicModel) SupportsEndpoint(endpoint string) bool {
 	default:
 		return false
 	}
+}
+
+// SupportsImageEdits is restricted to the implemented MiniMax editing protocol.
+func (m PublicModel) SupportsImageEdits() bool {
+	return m.SupportsImageGenerations && strings.EqualFold(m.ProviderConfig.ProviderName, "minimax") &&
+		(m.UpstreamModelName == "MiniMax-H3-Image" || m.UpstreamModelName == "MiniMax-H3-Image-Highspeed")
 }

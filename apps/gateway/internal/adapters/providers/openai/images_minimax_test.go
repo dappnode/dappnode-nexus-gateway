@@ -81,3 +81,33 @@ func TestMiniMaxImageSize(t *testing.T) {
 		}
 	}
 }
+
+func TestMiniMaxH3EditsKeepsUsageAndOnlySuccessfulImages(t *testing.T) {
+	t.Setenv("MINIMAX_TEST_API_KEY", "k")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.URL.Path != "/images/edits" || body["area"] != "1K" || body["response_format"] != "b64_json" || body["model"] != "MiniMax-H3-Image" {
+			t.Errorf("unexpected H3 request: %s %v", r.URL.Path, body)
+		}
+		if len(body["images"].([]any)) != 1 {
+			t.Error("lost reference image")
+		}
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"aW1n"},{"error":{"code":"1027"}}],"usage":{"generated_images":1,"output_tokens":8000,"input_tokens_details":{"text_tokens":200,"image_tokens":1000}}}`))
+	}))
+	defer server.Close()
+	model := miniMaxModel(server.URL)
+	model.UpstreamModelName = "MiniMax-H3-Image"
+	model.SupportsImageGenerations = true
+	out, err := NewAdapter(time.Second).GenerateImages(context.Background(), []byte(`{"model":"public","prompt":"change background","images":[{"image_url":"data:image/png;base64,abc"}],"n":2}`), model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Data  []any
+		Usage json.RawMessage
+	}
+	if json.Unmarshal(out, &got) != nil || len(got.Data) != 1 || len(got.Usage) == 0 {
+		t.Fatalf("bad response: %s", out)
+	}
+}

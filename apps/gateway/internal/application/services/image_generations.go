@@ -18,8 +18,8 @@ import (
 
 // Image generation defaults; see SetImageOptions.
 const (
-	// DefaultImageTimeout bounds one image generation, fallback included.
-	DefaultImageTimeout = 120 * time.Second
+	// DefaultImageTimeout allows MiniMax's 600-second synchronous wait.
+	DefaultImageTimeout = 660 * time.Second
 	// DefaultImageConcurrency is how many image generations one account
 	// runs at once.
 	DefaultImageConcurrency = 2
@@ -48,7 +48,7 @@ func (s *GenerateService) SetImageOptions(timeout time.Duration, perAccount int)
 
 // GenerateImages runs POST /v1/images/generations. It authenticates, keeps
 // guests out, holds the price of the requested images, calls the provider
-// (falling back like chat), and charges the images the provider returned. A
+// once without automatic retry or fallback, and charges successful outputs. A
 // request the provider refuses costs nothing.
 //
 // idempotencyKey, when set, makes retries safe: a retry of a finished request
@@ -89,6 +89,12 @@ func (s *GenerateService) GenerateImages(ctx context.Context, raw []byte, req do
 		return nil, reject(err, &model)
 	}
 
+	if !strings.EqualFold(model.ProviderConfig.ProviderName, "minimax") {
+		return nil, reject(domain.ErrUnsupportedFeature("only MiniMax image providers are enabled"), &model)
+	}
+	if req.ImageEdit && !model.SupportsImageEdits() {
+		return nil, reject(domain.ErrUnsupportedFeature("this model does not support image editing"), &model)
+	}
 	var idem *idempotentRequest
 	if idempotencyKey != "" {
 		var replay []byte
@@ -104,7 +110,7 @@ func (s *GenerateService) GenerateImages(ctx context.Context, raw []byte, req do
 	call, err := s.generateImages(ctx, authCtx, raw, req, model, start)
 	if idem != nil {
 		if err != nil {
-			s.idempotency.abandon(idem) // Nothing was charged: the key may be retried.
+			s.idempotency.finish(idem, nil) // Never resubmit a possibly billed upstream request with this key.
 		} else {
 			s.idempotency.finish(idem, call.Body)
 		}
@@ -142,7 +148,6 @@ func (s *GenerateService) generateImages(ctx context.Context, authCtx domain.Aut
 	// longer follows the client's connection, so a client that hangs up is
 	// still charged for the images it asked for, and gets them on a retry
 	// with the same Idempotency-Key.
-	clientCtx := ctx
 	ctx, cancelTimeout := context.WithTimeout(context.WithoutCancel(ctx), s.imageTimeout)
 	defer cancelTimeout()
 	ctx, cancelInference := context.WithCancelCause(ctx)
@@ -155,6 +160,7 @@ func (s *GenerateService) generateImages(ctx context.Context, authCtx domain.Aut
 	}
 	defer stopRenewal()
 
+	var providerBody []byte
 	attempt := func(target domain.PublicModel) ([]byte, int64, error) {
 		if err := s.validateRequest(endpoint, req, target); err != nil {
 			return nil, 0, err
@@ -175,18 +181,13 @@ func (s *GenerateService) generateImages(ctx context.Context, authCtx domain.Aut
 		if err != nil {
 			return nil, 0, imageProviderError(err)
 		}
+		providerBody = body
 		return readImageResponse(body, req.Images)
 	}
 
 	executed := model
 	body, count, err := attempt(model)
-	if err != nil && clientCtx.Err() == nil && shouldTryFallback(ctx, err, model.Fallback) &&
-		withProviderTarget(model, *model.Fallback).SupportsEndpoint(endpoint) {
-		executed = withProviderTarget(model, *model.Fallback)
-		s.logFallback(requestID, model, executed, err)
-		metrics.RecordFallback(endpoint, model.PublicModelID, model.ProviderConfig.ProviderName, executed.ProviderConfig.ProviderName, err)
-		body, count, err = attempt(executed)
-	}
+
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
 		if cause, ok := context.Cause(ctx).(*domain.GatewayError); ok {
@@ -203,6 +204,13 @@ func (s *GenerateService) generateImages(ctx context.Context, authCtx domain.Aut
 	}
 
 	usage := &domain.Usage{Images: count}
+	if model.SupportsImageEdits() {
+		var upstream struct {
+			Usage json.RawMessage `json:"usage"`
+		}
+		_ = json.Unmarshal(providerBody, &upstream)
+		usage.ProviderUsage = upstream.Usage
+	}
 	result := domain.GenerateResult{
 		PublicModelID: executed.PublicModelID, ProviderName: executed.ProviderConfig.ProviderName,
 		ProviderModelID: executed.ProviderModelID, Usage: usage,

@@ -38,7 +38,8 @@ type GenerateRequest struct {
 	// StructuredOutput is set when the client asks for JSON output.
 	StructuredOutput bool
 	// Images is how many images an image generation asks for.
-	Images *int
+	Images    *int
+	ImageEdit bool
 }
 
 // InputItem is one message: its role and text.

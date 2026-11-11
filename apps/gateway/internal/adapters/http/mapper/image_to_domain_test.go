@@ -1,6 +1,13 @@
 package mapper
 
-import "testing"
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"image"
+	"image/png"
+	"testing"
+)
 
 func TestImageGenerationRequestToDomain(t *testing.T) {
 	req, err := ImageGenerationRequestToDomain([]byte(`{"model":"flux","prompt":"a fox"}`))
@@ -27,5 +34,40 @@ func TestImageGenerationRequestToDomain(t *testing.T) {
 		if _, err := ImageGenerationRequestToDomain([]byte(body)); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
+	}
+}
+
+func TestImageEditRejectsRemoteAndInvalidReferences(t *testing.T) {
+	for _, images := range []string{`[]`, `null`, `[{"image_url":"https://example.com/image.png"}]`, `[{"image_url":"data:image/png;base64,not-an-image"}]`} {
+		if _, err := ImageGenerationRequestToDomain([]byte(`{"model":"minimax/h3-image","prompt":"edit","images":` + images + `}`)); err == nil {
+			t.Errorf("accepted %s", images)
+		}
+	}
+}
+
+func TestImageEditValidatesReferenceDimensionsAndMIME(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		width, height int
+		mime          string
+		valid         bool
+	}{
+		{"valid", 128, 128, "png", true},
+		{"too small", 127, 128, "png", false},
+		{"too wide", 640, 128, "png", false},
+		{"MIME mismatch", 128, 128, "jpeg", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, tc.width, tc.height))); err != nil {
+				t.Fatal(err)
+			}
+			dataURL := "data:image/" + tc.mime + ";base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+			body, _ := json.Marshal(map[string]any{"model": "minimax/h3-image", "prompt": "edit", "images": []map[string]string{{"image_url": dataURL}}})
+			_, err := ImageGenerationRequestToDomain(body)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, error=%v", tc.valid, err)
+			}
+		})
 	}
 }
