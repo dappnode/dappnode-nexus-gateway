@@ -53,7 +53,7 @@ func toPublicModelData(m domain.PublicModel, eurToUSDRate float64) dto.ModelData
 	inputPrice := eurToCents(m.InputPricePerMillion)
 	outputPrice := eurToCents(m.OutputPricePerMillion)
 	proofMode := m.EffectiveProofMode()
-	return dto.ModelData{
+	data := dto.ModelData{
 		ID:                              m.PublicModelID,
 		Object:                          "model",
 		Kind:                            string(domain.CatalogKindPublicModel),
@@ -73,11 +73,26 @@ func toPublicModelData(m domain.PublicModel, eurToUSDRate float64) dto.ModelData
 		OutputPricePer1MTokensUSD:       priceToUSDPtr(m.Currency, m.OutputPricePerMillion, eurToUSDRate),
 		CacheReadPricePer1MTokensUSD:    pricePtrToUSDPtr(m.Currency, m.CacheReadPricePerMillion, eurToUSDRate),
 		CacheWritePricePer1MTokensUSD:   pricePtrToUSDPtr(m.Currency, m.CacheWritePricePerMillion, eurToUSDRate),
+		PricePerImageCents:              fractionalCents(m.PricePerImage),
+		ImageInputPricePer1MTokensCents: eurPtrToCentsPtr(m.ImageInputPricePerMillion),
+		ImageInputPricePer1MTokensUSD:   pricePtrToUSDPtr(m.Currency, m.ImageInputPricePerMillion, eurToUSDRate),
+		ImageMaxCostPerImageCents:       fractionalCents(m.ImageMaxCostPerImage),
+		PricePerImageUSD:                pricePtrToUSDPtr(m.Currency, m.PricePerImage, eurToUSDRate),
 		Capabilities:                    publishedCapabilities(m),
 		Endpoints:                       modelEndpoints(m),
 		ProofMode:                       proofMode,
 		ProofsEnabled:                   domain.ProofModeEnabled(proofMode),
 	}
+	if !m.SupportsChatCompletions && m.SupportsEndpoint(domain.EndpointImageGenerations) {
+		// Image requests have no chat token limits; token-priced image models
+		// still publish their retail text/reference/output rates.
+		data.ContextSize, data.MaxOutputTokens = nil, nil
+		if m.ImageInputPricePerMillion == nil {
+			data.InputPricePer1MTokensCents, data.OutputPricePer1MTokensCents = nil, nil
+			data.InputPricePer1MTokensUSD, data.OutputPricePer1MTokensUSD = nil, nil
+		}
+	}
+	return data
 }
 
 func toRouterData(r domain.RouterEntry) dto.ModelData {
@@ -112,11 +127,27 @@ func modelEndpoints(m domain.PublicModel) []string {
 	if m.SupportsChatCompletions {
 		endpoints = append(endpoints, "chat/completions")
 	}
+	if m.SupportsEndpoint(domain.EndpointImageGenerations) {
+		endpoints = append(endpoints, "images/generations")
+		if m.SupportsImageEdits() {
+			endpoints = append(endpoints, "images/edits")
+		}
+	}
 	return endpoints
 }
 
 func eurToCents(price decimal.Decimal) int64 {
 	return price.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+}
+
+// fractionalCents is a price in cents to microcent precision: per-image prices are
+// often fractions of a cent.
+func fractionalCents(price *decimal.Decimal) *float64 {
+	if price == nil {
+		return nil
+	}
+	cents, _ := price.Mul(decimal.NewFromInt(100)).Round(6).Float64()
+	return &cents
 }
 
 func eurPtrToCentsPtr(price *decimal.Decimal) *int64 {
@@ -145,7 +176,7 @@ func priceToUSDPtr(currency string, price decimal.Decimal, eurToUSDRate float64)
 	if factor <= 0 {
 		return nil
 	}
-	usd, _ := price.Mul(decimal.NewFromFloat(factor)).Round(4).Float64()
+	usd, _ := price.Mul(decimal.NewFromFloat(factor)).Round(8).Float64()
 	return &usd
 }
 

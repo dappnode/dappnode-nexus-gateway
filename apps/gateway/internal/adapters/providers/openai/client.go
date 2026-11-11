@@ -50,8 +50,17 @@ func (c *Client) Do(ctx context.Context, baseURL, apiKey string, body map[string
 	return c.DoEndpoint(ctx, baseURL, "/chat/completions", apiKey, body)
 }
 
+// maxJSONResponseSize bounds a non-streaming JSON response.
+const maxJSONResponseSize = 10 * 1024 * 1024
+
 // DoEndpoint uses the same bounded, enclave-aware transport for JSON APIs.
 func (c *Client) DoEndpoint(ctx context.Context, baseURL, endpoint, apiKey string, body map[string]any) ([]byte, error) {
+	return c.DoEndpointLimit(ctx, baseURL, endpoint, apiKey, body, maxJSONResponseSize)
+}
+
+// DoEndpointLimit is DoEndpoint with a response size limit; a response over
+// the limit is an error rather than a truncated body.
+func (c *Client) DoEndpointLimit(ctx context.Context, baseURL, endpoint, apiKey string, body map[string]any, limit int64) ([]byte, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -71,9 +80,12 @@ func (c *Client) DoEndpoint(ctx context.Context, baseURL, endpoint, apiKey strin
 	resp.Body = providerstream.WithIdleTimeout(resp.Body, c.responseTimeout)
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read provider response: %w", err)
+	}
+	if int64(len(respBody)) > limit {
+		return nil, fmt.Errorf("provider response is larger than %d bytes", limit)
 	}
 
 	if resp.StatusCode >= 400 {

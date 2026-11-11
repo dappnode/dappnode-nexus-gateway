@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/shopspring/decimal"
 )
@@ -41,6 +42,8 @@ type PublicModel struct {
 	ProviderConfig          ProviderConfig
 	Fallback                *ProviderTarget
 	SupportsChatCompletions bool // Routing: whether chat is served.
+	// SupportsImageGenerations marks a model serving image requests.
+	SupportsImageGenerations bool
 	// Capabilities is the operator's description of the model, a JSON object
 	// published unchanged in /v1/models. Gateway never rejects requests by it.
 	Capabilities              json.RawMessage
@@ -51,8 +54,16 @@ type PublicModel struct {
 	OutputPricePerMillion     decimal.Decimal
 	CacheReadPricePerMillion  *decimal.Decimal
 	CacheWritePricePerMillion *decimal.Decimal
+	// Image token rates use InputPricePerMillion for text and OutputPricePerMillion
+	// for generated images. PricePerImage is only for fixed-price image models.
+	ImageInputPricePerMillion *decimal.Decimal
+	ImageMaxCostPerImage      *decimal.Decimal
+	PricePerImage             *decimal.Decimal
 	Currency                  string
 	Active                    bool
+	// GuestAllowed marks a model guest chat keys may call; they can call no
+	// other model or router.
+	GuestAllowed bool
 }
 
 func (m PublicModel) EffectiveProofMode() string {
@@ -76,7 +87,15 @@ func (m PublicModel) SupportsEndpoint(endpoint string) bool {
 	switch endpoint {
 	case EndpointChatCompletions:
 		return m.SupportsChatCompletions
+	case EndpointImageGenerations:
+		return m.SupportsImageGenerations && (m.PricePerImage != nil || (m.SupportsImageEdits() && m.ImageInputPricePerMillion != nil && m.ImageMaxCostPerImage != nil))
 	default:
 		return false
 	}
+}
+
+// SupportsImageEdits is restricted to the implemented MiniMax editing protocol.
+func (m PublicModel) SupportsImageEdits() bool {
+	return m.SupportsImageGenerations && strings.EqualFold(m.ProviderConfig.ProviderName, "minimax") &&
+		(m.UpstreamModelName == "MiniMax-H3-Image" || m.UpstreamModelName == "MiniMax-H3-Image-Highspeed")
 }

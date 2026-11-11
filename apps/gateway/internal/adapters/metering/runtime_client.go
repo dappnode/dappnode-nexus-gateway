@@ -33,6 +33,7 @@ func (c *Client) AuthenticateAPIKey(ctx context.Context, rawKey string) (domain.
 			ID:                 response.Account.ID,
 			ExternalCustomerID: response.Account.ExternalCustomerID,
 			Status:             response.Account.Status,
+			IsGuest:            response.Account.IsGuest,
 		},
 		APIKey: domain.APIKey{
 			ID:         response.APIKey.ID,
@@ -158,6 +159,12 @@ func validateAuthenticateResponse(response authenticateResponse) *domain.Gateway
 	return nil
 }
 
+// imageOnly is an image model that serves no chat: it has no context window
+// or output limit.
+func imageOnly(model runtimePublicModel) bool {
+	return model.SupportsImageGenerations && model.SupportsChatCompletions != nil && !*model.SupportsChatCompletions
+}
+
 func validateRuntimePublicModel(model runtimePublicModel, expectedPublicModelID string) *domain.GatewayError {
 	switch {
 	case strings.TrimSpace(model.ID) == "":
@@ -201,10 +208,16 @@ func validateRuntimePublicModel(model runtimePublicModel, expectedPublicModelID 
 		return runtimeContractError("public model", "supports_reasoning is required")
 	case model.ProofMode != domain.ProofModeNone && model.ProofMode != domain.ProofModeTinfoilAttestedTransport:
 		return runtimeContractError("public model", "proof_mode is invalid")
-	case model.MaxContextWindow <= 0:
+	case model.MaxContextWindow <= 0 && !imageOnly(model):
 		return runtimeContractError("public model", "max_context_window must be positive")
-	case model.MaxOutputTokens <= 0:
+	case model.MaxOutputTokens <= 0 && !imageOnly(model):
 		return runtimeContractError("public model", "max_output_tokens must be positive")
+	case model.MaxContextWindow < 0 || model.MaxOutputTokens < 0:
+		return runtimeContractError("public model", "token limits must not be negative")
+	case model.SupportsImageGenerations && model.PricePerImageMicrocents != nil && *model.PricePerImageMicrocents < 0:
+		return runtimeContractError("public model", "price per image must not be negative")
+	case model.ImageInputPricePer1MTokensMicrocents != nil && (*model.ImageInputPricePer1MTokensMicrocents < 0 || model.ImageMaxCostPerImageMicrocents == nil || *model.ImageMaxCostPerImageMicrocents <= 0 || model.PricePerImageMicrocents != nil):
+		return runtimeContractError("public model", "image token prices require a non-negative reference rate and a positive spending ceiling without a fixed image price")
 	case model.InputPricePer1MTokensMicrocents == nil:
 		return runtimeContractError("public model", "input price is required")
 	case *model.InputPricePer1MTokensMicrocents < 0:
@@ -357,6 +370,7 @@ func (m runtimePublicModel) toDomain() domain.PublicModel {
 		OutputPricePerMillion:   priceFromMicrocents(*m.OutputPricePer1MTokensMicrocents),
 		Currency:                m.Currency,
 		Active:                  m.Active,
+		GuestAllowed:            m.GuestAllowed,
 	}
 	if m.Fallback != nil {
 		model.Fallback = &domain.ProviderTarget{
@@ -377,6 +391,19 @@ func (m runtimePublicModel) toDomain() domain.PublicModel {
 		price := priceFromMicrocents(*m.CacheWritePricePer1MTokensMicrocents)
 		model.CacheWritePricePerMillion = &price
 	}
+	if m.PricePerImageMicrocents != nil {
+		price := priceFromMicrocents(*m.PricePerImageMicrocents)
+		model.PricePerImage = &price
+	}
+	if m.ImageInputPricePer1MTokensMicrocents != nil {
+		v := priceFromMicrocents(*m.ImageInputPricePer1MTokensMicrocents)
+		model.ImageInputPricePerMillion = &v
+	}
+	if m.ImageMaxCostPerImageMicrocents != nil {
+		v := priceFromMicrocents(*m.ImageMaxCostPerImageMicrocents)
+		model.ImageMaxCostPerImage = &v
+	}
+	model.SupportsImageGenerations = m.SupportsImageGenerations
 	return model
 }
 
@@ -413,6 +440,7 @@ type runtimeAccount struct {
 	ID                 string  `json:"id"`
 	ExternalCustomerID *string `json:"external_customer_id,omitempty"`
 	Status             string  `json:"status"`
+	IsGuest            bool    `json:"is_guest"`
 }
 
 type runtimeAPIKey struct {
@@ -426,31 +454,37 @@ type runtimeAPIKey struct {
 }
 
 type runtimePublicModel struct {
-	ID                                   string                 `json:"id"`
-	PublicModelID                        string                 `json:"public_model_id"`
-	DisplayName                          string                 `json:"display_name"`
-	Description                          *string                `json:"description,omitempty"`
-	ProviderModelID                      string                 `json:"provider_model_id"`
-	UpstreamModelName                    string                 `json:"upstream_model_name"`
-	ServiceTier                          *string                `json:"service_tier,omitempty"`
-	ProviderConfig                       runtimeProviderConfig  `json:"provider_config"`
-	Fallback                             *runtimeProviderTarget `json:"fallback,omitempty"`
-	SupportsChatCompletions              *bool                  `json:"supports_chat_completions"`
-	SupportsChatCompletionsStream        *bool                  `json:"supports_chat_completions_stream"`
-	SupportsTools                        *bool                  `json:"supports_tools"`
-	SupportsParallelToolCalls            *bool                  `json:"supports_parallel_tool_calls"`
-	SupportsStructuredOutput             *bool                  `json:"supports_structured_output"`
-	SupportsReasoning                    *bool                  `json:"supports_reasoning"`
-	Capabilities                         json.RawMessage        `json:"capabilities,omitempty"`
-	ProofMode                            string                 `json:"proof_mode"`
-	MaxContextWindow                     int                    `json:"max_context_window"`
-	MaxOutputTokens                      int                    `json:"max_output_tokens"`
-	InputPricePer1MTokensMicrocents      *int64                 `json:"input_price_per_1m_tokens_microcents"`
-	OutputPricePer1MTokensMicrocents     *int64                 `json:"output_price_per_1m_tokens_microcents"`
-	CacheReadPricePer1MTokensMicrocents  *int64                 `json:"cache_read_price_per_1m_tokens_microcents,omitempty"`
-	CacheWritePricePer1MTokensMicrocents *int64                 `json:"cache_write_price_per_1m_tokens_microcents,omitempty"`
-	Currency                             string                 `json:"currency"`
-	Active                               bool                   `json:"active"`
+	ID                            string                 `json:"id"`
+	PublicModelID                 string                 `json:"public_model_id"`
+	DisplayName                   string                 `json:"display_name"`
+	Description                   *string                `json:"description,omitempty"`
+	ProviderModelID               string                 `json:"provider_model_id"`
+	UpstreamModelName             string                 `json:"upstream_model_name"`
+	ServiceTier                   *string                `json:"service_tier,omitempty"`
+	ProviderConfig                runtimeProviderConfig  `json:"provider_config"`
+	Fallback                      *runtimeProviderTarget `json:"fallback,omitempty"`
+	SupportsChatCompletions       *bool                  `json:"supports_chat_completions"`
+	SupportsChatCompletionsStream *bool                  `json:"supports_chat_completions_stream"`
+	SupportsTools                 *bool                  `json:"supports_tools"`
+	SupportsParallelToolCalls     *bool                  `json:"supports_parallel_tool_calls"`
+	SupportsStructuredOutput      *bool                  `json:"supports_structured_output"`
+	SupportsReasoning             *bool                  `json:"supports_reasoning"`
+	// Absent from an older Metering, which has no image models.
+	SupportsImageGenerations             bool            `json:"supports_image_generations"`
+	Capabilities                         json.RawMessage `json:"capabilities,omitempty"`
+	ProofMode                            string          `json:"proof_mode"`
+	MaxContextWindow                     int             `json:"max_context_window"`
+	MaxOutputTokens                      int             `json:"max_output_tokens"`
+	InputPricePer1MTokensMicrocents      *int64          `json:"input_price_per_1m_tokens_microcents"`
+	OutputPricePer1MTokensMicrocents     *int64          `json:"output_price_per_1m_tokens_microcents"`
+	CacheReadPricePer1MTokensMicrocents  *int64          `json:"cache_read_price_per_1m_tokens_microcents,omitempty"`
+	CacheWritePricePer1MTokensMicrocents *int64          `json:"cache_write_price_per_1m_tokens_microcents,omitempty"`
+	ImageInputPricePer1MTokensMicrocents *int64          `json:"image_input_price_per_1m_tokens_microcents,omitempty"`
+	ImageMaxCostPerImageMicrocents       *int64          `json:"image_max_cost_per_image_microcents,omitempty"`
+	PricePerImageMicrocents              *int64          `json:"price_per_image_microcents,omitempty"`
+	Currency                             string          `json:"currency"`
+	Active                               bool            `json:"active"`
+	GuestAllowed                         bool            `json:"guest_allowed"`
 }
 
 type runtimeProviderTarget struct {

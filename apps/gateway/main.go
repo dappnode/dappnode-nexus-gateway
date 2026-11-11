@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -93,6 +94,20 @@ func main() {
 	generateSvc := services.NewGenerateService(authService, modelCatalog, routerClient, providerRegistry, meteringClient, piiFilter, zapLogger)
 	generateSvc.SetPIIOptions(piiLang, piiFailOpen)
 	generateSvc.SetTinfoilProofRepository(tinfoilProofRepo)
+	guestMaxOutput, err := positiveIntEnv("GUEST_MAX_OUTPUT_TOKENS", services.DefaultGuestMaxOutputTokens)
+	if err != nil {
+		log.Fatalf("invalid guest chat configuration: %v", err)
+	}
+	generateSvc.SetGuestMaxOutputTokens(guestMaxOutput)
+	imageTimeout, err := timeoutSeconds("IMAGE_GENERATION_TIMEOUT_SECONDS", services.DefaultImageTimeout)
+	if err != nil {
+		log.Fatalf("invalid image generation configuration: %v", err)
+	}
+	imageJobs, err := positiveIntEnv("IMAGE_GENERATION_CONCURRENCY_PER_ACCOUNT", services.DefaultImageConcurrency)
+	if err != nil {
+		log.Fatalf("invalid image generation configuration: %v", err)
+	}
+	generateSvc.SetImageOptions(imageTimeout, imageJobs)
 	chatCompletionsSvc := services.NewChatCompletionsService(generateSvc, zapLogger)
 
 	healthHandler := handlers.NewHealthHandler()
@@ -135,7 +150,7 @@ func main() {
 		}
 	}
 
-	router := gwhttp.NewRouter(healthHandler, modelsHandler, chatHandler, handlers.NewSystemOneHandler(generateSvc, zapLogger), confidentialChatHandler, tinfoilHandler, attestationHandler, zapLogger)
+	router := gwhttp.NewRouter(healthHandler, modelsHandler, chatHandler, handlers.NewImageGenerationsHandler(generateSvc, zapLogger), handlers.NewSystemOneHandler(generateSvc, zapLogger), confidentialChatHandler, tinfoilHandler, attestationHandler, zapLogger)
 	router = middleware.ReadTimeout(transportTimeouts.ClientIO)(middleware.WriteTimeout(transportTimeouts.ClientIO)(router))
 
 	metricsMux := http.NewServeMux()
@@ -246,4 +261,18 @@ func buildPIIFilter(log *logger.ZapLogger) (ports.PIIFilter, string, bool) {
 		Timeout:         timeout,
 		Logger:          log,
 	}), language, failOpen
+}
+
+// positiveIntEnv reads a positive whole number from the environment. A set but
+// invalid value is an error, so a typo cannot silently loosen a limit.
+func positiveIntEnv(name string, fallback int) (int, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s must be a positive whole number", name)
+	}
+	return n, nil
 }

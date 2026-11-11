@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/services"
@@ -45,8 +44,7 @@ func TestRelay_EndsEveryStream(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			handler := &ChatCompletionsHandler{logger: &confidentialTestLogger{}}
-			var finished atomic.Bool
-			handler.relay(recorder, httptest.NewRequest("POST", "/v1/chat/completions", nil), services.NewProxyStream(brokenBody{tc.body}, "m"), &finished)
+			handler.relay(recorder, httptest.NewRequest("POST", "/v1/chat/completions", nil), services.NewProxyStream(brokenBody{tc.body}, "m"))
 			body := recorder.Body.String()
 			for _, want := range tc.want {
 				if !strings.Contains(body, want) {

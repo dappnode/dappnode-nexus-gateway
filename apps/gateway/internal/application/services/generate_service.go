@@ -26,6 +26,12 @@ type GenerateService struct {
 	piiFailOpen   bool
 	tinfoilProofs ports.TinfoilTransportProofRepository
 	logger        ports.Logger
+	// guestMaxOutputTokens is the output limit of guest chat requests.
+	guestMaxOutputTokens int
+	// Image generation: see SetImageOptions and GenerateImages.
+	imageTimeout time.Duration
+	imageJobs    *accountSlots
+	idempotency  *idempotencyStore
 }
 
 func NewGenerateService(
@@ -46,6 +52,12 @@ func NewGenerateService(
 		pii:      pii,
 		piiLang:  "en",
 		logger:   logger,
+
+		guestMaxOutputTokens: DefaultGuestMaxOutputTokens,
+
+		imageTimeout: DefaultImageTimeout,
+		imageJobs:    newAccountSlots(DefaultImageConcurrency),
+		idempotency:  newIdempotencyStore(),
 	}
 }
 
@@ -56,6 +68,12 @@ func (s *GenerateService) SetPIIOptions(language string, failOpen bool) {
 		s.piiLang = language
 	}
 	s.piiFailOpen = failOpen
+}
+
+// SetGuestMaxOutputTokens sets the output limit of guest chat requests; see
+// capOutput.
+func (s *GenerateService) SetGuestMaxOutputTokens(limit int) {
+	s.guestMaxOutputTokens = limit
 }
 
 func (s *GenerateService) SetTinfoilProofRepository(proofs ports.TinfoilTransportProofRepository) {

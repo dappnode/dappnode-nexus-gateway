@@ -35,6 +35,11 @@ const (
 	ErrCodeUnknownField            = "unknown_field"
 	ErrCodeInsufficientBalance     = "insufficient_balance"
 	ErrCodeDailyTokenLimit         = "daily_token_limit_exceeded"
+	ErrCodeGuestModelNotAllowed    = "guest_model_not_allowed"
+	ErrCodeContentPolicy           = "content_policy_violation"
+	ErrCodeTooManyConcurrent       = "too_many_concurrent_requests"
+	ErrCodeIdempotencyInProgress   = "idempotency_request_in_progress"
+	ErrCodeIdempotencyKeyReused    = "idempotency_key_reused"
 	ErrCodeConfidentialLimit       = "confidential_request_limit_exceeded"
 	ErrCodeClientCanceled          = "client_canceled"
 	ErrCodeInternalError           = "internal_error"
@@ -61,7 +66,7 @@ func (e *GatewayError) WithMeta(fields ...any) *GatewayError {
 	if cp.Metadata == nil {
 		cp.Metadata = make(map[string]any, len(fields)/2)
 	} else {
-		m := make(map[string]any, len(cp.Metadata)+len(fields)/2)
+		m := make(map[string]any, len(cp.Metadata)) // Grows for the new fields.
 		for k, v := range cp.Metadata {
 			m[k] = v
 		}
@@ -91,6 +96,40 @@ func (e *GatewayError) LogFields() []any {
 
 func ErrInvalidAPIKey(msg string) *GatewayError {
 	return &GatewayError{HTTPStatus: 401, Type: ErrTypeAuthentication, Code: ErrCodeInvalidAPIKey, Message: msg}
+}
+
+// ErrGuestModelNotAllowed refuses a guest chat key a model or endpoint that
+// is not open to guests (public_models.guest_allowed).
+func ErrGuestModelNotAllowed(model string) *GatewayError {
+	return &GatewayError{HTTPStatus: 403, Type: ErrTypePermission, Code: ErrCodeGuestModelNotAllowed,
+		Message: fmt.Sprintf("Guest chat can't use '%s'. Sign up for free to use every model.", model)}
+}
+
+// ErrContentPolicy is a prompt the provider refused to generate. Nothing is
+// charged for it.
+func ErrContentPolicy() *GatewayError {
+	return &GatewayError{HTTPStatus: 422, Type: ErrTypeInvalidRequest, Code: ErrCodeContentPolicy,
+		Message: "The provider refused this prompt under its content policy. Nothing was charged."}
+}
+
+// ErrTooManyConcurrent limits how many slow jobs (image generations) one
+// account runs at once.
+func ErrTooManyConcurrent(limit int) *GatewayError {
+	return &GatewayError{HTTPStatus: 429, Type: ErrTypeRateLimit, Code: ErrCodeTooManyConcurrent, RetryAfter: "5",
+		Message: fmt.Sprintf("This account already has %d image generations running. Wait for one to finish.", limit)}
+}
+
+// ErrIdempotencyInProgress is a retry that arrived while the first request
+// with the same Idempotency-Key is still running.
+func ErrIdempotencyInProgress() *GatewayError {
+	return &GatewayError{HTTPStatus: 409, Type: ErrTypeInvalidRequest, Code: ErrCodeIdempotencyInProgress, RetryAfter: "2",
+		Message: "A request with this Idempotency-Key is still running. Retry when it has finished."}
+}
+
+// ErrIdempotencyKeyReused is a key already used for a finished request whose
+// result the gateway no longer holds, or for a different request.
+func ErrIdempotencyKeyReused(msg string) *GatewayError {
+	return &GatewayError{HTTPStatus: 409, Type: ErrTypeInvalidRequest, Code: ErrCodeIdempotencyKeyReused, Message: msg}
 }
 
 func ErrUnsupportedModel(model string) *GatewayError {

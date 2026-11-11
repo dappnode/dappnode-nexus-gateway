@@ -13,7 +13,7 @@ and pull requests are welcome.
 
 ## Development
 
-The project requires Go 1.26.10 or newer.
+The project requires Go 1.26.11 or newer.
 
 ```sh
 go test ./...

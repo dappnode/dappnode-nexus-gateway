@@ -16,8 +16,9 @@ import (
 
 // Adapter is the OpenAI-compatible provider adapter.
 type Adapter struct {
-	client *Client
-	logger ports.Logger
+	client      *Client
+	imageClient *Client
+	logger      ports.Logger
 }
 
 const (
@@ -34,7 +35,7 @@ func NewAdapter(timeout time.Duration, logger ...ports.Logger) *Adapter {
 	if len(logger) > 0 {
 		l = logger[0]
 	}
-	return &Adapter{client: NewClient(timeout), logger: l}
+	return &Adapter{client: NewClient(timeout), imageClient: NewClient(660 * time.Second), logger: l}
 }
 
 func missingProviderCredentialError(providerName string) *domain.GatewayError {

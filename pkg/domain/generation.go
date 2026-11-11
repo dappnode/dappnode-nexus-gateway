@@ -2,8 +2,9 @@ package domain
 
 // Endpoint constants.
 const (
-	EndpointChatCompletions = "chat_completions"
-	EndpointSystemOne       = "systemone"
+	EndpointChatCompletions  = "chat_completions"
+	EndpointSystemOne        = "systemone"
+	EndpointImageGenerations = "image_generations"
 )
 
 // GenerateRequest is what the gateway reads from a client's request: enough
@@ -27,12 +28,18 @@ type GenerateRequest struct {
 	Input []InputItem
 	Tools []ToolDefinition
 
-	Stream            bool
-	MaxOutputTokens   *int
-	ServiceTier       *string
-	ParallelToolCalls *bool
+	Stream          bool
+	MaxOutputTokens *int
+	// EstimatedInputTokens is an upper bound on the prompt's tokens, sized
+	// from the body sent upstream; nil when no bound is known.
+	EstimatedInputTokens *int64
+	ServiceTier          *string
+	ParallelToolCalls    *bool
 	// StructuredOutput is set when the client asks for JSON output.
 	StructuredOutput bool
+	// Images is how many images an image generation asks for.
+	Images    *int
+	ImageEdit bool
 }
 
 // InputItem is one message: its role and text.
