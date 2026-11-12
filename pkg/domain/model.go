@@ -55,10 +55,9 @@ type PublicModel struct {
 	CacheReadPricePerMillion  *decimal.Decimal
 	CacheWritePricePerMillion *decimal.Decimal
 	// Image token rates use InputPricePerMillion for text and OutputPricePerMillion
-	// for generated images. PricePerImage is only for fixed-price image models.
+	// for generated images.
 	ImageInputPricePerMillion *decimal.Decimal
 	ImageMaxCostPerImage      *decimal.Decimal
-	PricePerImage             *decimal.Decimal
 	Currency                  string
 	Active                    bool
 	// GuestAllowed marks a model guest chat keys may call; they can call no
@@ -88,7 +87,7 @@ func (m PublicModel) SupportsEndpoint(endpoint string) bool {
 	case EndpointChatCompletions:
 		return m.SupportsChatCompletions
 	case EndpointImageGenerations:
-		return m.SupportsImageGenerations && (m.PricePerImage != nil || (m.SupportsImageEdits() && m.ImageInputPricePerMillion != nil && m.ImageMaxCostPerImage != nil))
+		return m.SupportsImageGenerations && m.SupportsImageEdits() && m.ImageInputPricePerMillion != nil && m.ImageMaxCostPerImage != nil
 	default:
 		return false
 	}

@@ -14,7 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-const twoImages = `{"created":1,"data":[{"b64_json":"aGVsbG8="},{"b64_json":"d29ybGQ="}],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"cost":0.03}}`
+const twoImages = `{"created":1,"data":[{"b64_json":"aGVsbG8="},{"b64_json":"d29ybGQ="}],"usage":{"input_tokens":10,"output_tokens":200,"total_tokens":210,"generated_images":2,"input_tokens_details":{"text_tokens":10,"image_tokens":0},"output_tokens_details":{"image_tokens":200}}}`
 
 // imageProvider is an OpenAI-compatible provider that also generates images.
 type imageProvider struct {
@@ -61,12 +61,12 @@ func (m *imageMeter) RecordSuccess(ctx context.Context, reservationID string, au
 func imageModel() domain.PublicModel {
 	price := decimal.RequireFromString("0.02")
 	return domain.PublicModel{
-		PublicModelID:            "flux",
-		ProviderModelID:          "phala-flux",
-		UpstreamModelName:        "black-forest-labs/flux",
-		ProviderConfig:           domain.ProviderConfig{ProviderName: "minimax"},
-		SupportsImageGenerations: true,
-		PricePerImage:            &price,
+		PublicModelID:             "minimax/h3-image",
+		ProviderModelID:           "minimax-h3-image",
+		UpstreamModelName:         "MiniMax-H3-Image",
+		ProviderConfig:            domain.ProviderConfig{ProviderName: "minimax"},
+		SupportsImageGenerations:  true,
+		ImageInputPricePerMillion: &price, ImageMaxCostPerImage: &price,
 	}
 }
 
@@ -86,10 +86,10 @@ func newImageService(meter ports.UsageMeter, provider ports.Provider, guest bool
 }
 
 func imageRequest(n int) domain.GenerateRequest {
-	return domain.GenerateRequest{PublicModelID: "flux", RequestedModelID: "flux", Images: &n}
+	return domain.GenerateRequest{PublicModelID: "minimax/h3-image", RequestedModelID: "minimax/h3-image", Images: &n}
 }
 
-const imageBody = `{"model":"flux","prompt":"a fox","n":2}`
+const imageBody = `{"model":"minimax/h3-image","prompt":"a fox","n":2}`
 
 func TestGenerateImagesChargesReturnedImages(t *testing.T) {
 	meter := &imageMeter{}
@@ -182,7 +182,7 @@ func TestGenerateImagesIdempotencyKeyReplaysWithoutCharging(t *testing.T) {
 		t.Fatalf("provider ran %d times and charged %d times, want once each", provider.imageRuns, len(meter.charged))
 	}
 
-	_, err = svc.GenerateImages(context.Background(), []byte(`{"model":"flux","prompt":"a cat"}`), imageRequest(1), "sk", "key-1")
+	_, err = svc.GenerateImages(context.Background(), []byte(`{"model":"minimax/h3-image","prompt":"a cat"}`), imageRequest(1), "sk", "key-1")
 	var gwErr *domain.GatewayError
 	if !errors.As(err, &gwErr) || gwErr.Code != domain.ErrCodeIdempotencyKeyReused {
 		t.Fatalf("err = %v, want idempotency_key_reused for a different body", err)
@@ -364,37 +364,12 @@ func TestIdempotencyKeyMatchesTheSameRequestFormattedDifferently(t *testing.T) {
 	}
 }
 
-func TestGenerateH3ImagesPreservesProviderUsageWithoutRetailTokens(t *testing.T) {
-	meter := &imageMeter{}
-	provider := &imageProvider{body: `{"data":[{"b64_json":"aGVsbG8="}],"usage":{"input_tokens_details":{"text_tokens":300,"image_tokens":2000},"output_tokens":4096}}`}
-	svc := newImageService(meter, provider, false)
-	model := imageModel()
-	model.UpstreamModelName = "MiniMax-H3-Image"
-	svc.catalog = &stubModelCatalog{model: model}
-	req := imageRequest(1)
-	req.ImageEdit = true
-	call, err := svc.GenerateImages(context.Background(), []byte(imageBody), req, "sk-test", "h3-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(meter.charged) != 1 {
-		t.Fatalf("charged=%+v", meter.charged)
-	}
-	usage := meter.charged[0]
-	if usage.Images != 1 || usage.PromptTokens != 0 || usage.CompletionTokens != 0 || !strings.Contains(string(usage.ProviderUsage), `"image_tokens":2000`) {
-		t.Fatalf("retail/provider usage mixed: %+v", usage)
-	}
-	if strings.Contains(string(call.Body), `"usage"`) {
-		t.Fatal("provider usage leaked into retail response")
-	}
-}
-
-func TestGenerateImagesRejectsOtherProvidersAndLegacyEdits(t *testing.T) {
+func TestGenerateImagesRejectsOtherProvidersAndUnsupportedModels(t *testing.T) {
 	for _, tc := range []struct {
 		name, provider string
 		edit           bool
 	}{
-		{"other provider", "phala", false}, {"legacy edit", "minimax", true},
+		{"other provider", "phala", false}, {"unsupported model", "minimax", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			meter := &imageMeter{}
@@ -402,6 +377,9 @@ func TestGenerateImagesRejectsOtherProvidersAndLegacyEdits(t *testing.T) {
 			svc := newImageService(meter, provider, false)
 			model := imageModel()
 			model.ProviderConfig.ProviderName = tc.provider
+			if tc.edit {
+				model.UpstreamModelName = "unsupported-image-model"
+			}
 			svc.catalog = &stubModelCatalog{model: model}
 			req := imageRequest(1)
 			req.ImageEdit = tc.edit
@@ -427,7 +405,6 @@ func TestGenerateH3ImagesBillsSeparateTokenDimensionsAndReplaysReceipt(t *testin
 	svc := newImageService(meter, provider, false)
 	model := imageModel()
 	model.UpstreamModelName = "MiniMax-H3-Image"
-	model.PricePerImage = nil
 	reference, ceiling := decimal.RequireFromString("3"), decimal.RequireFromString("0.50")
 	model.ImageInputPricePerMillion = &reference
 	model.ImageMaxCostPerImage = &ceiling

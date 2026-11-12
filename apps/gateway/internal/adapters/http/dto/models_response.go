@@ -29,13 +29,11 @@ type ModelData struct {
 	OutputPricePer1MTokensUSD       *float64 `json:"output_price_per_1m_tokens_usd,omitempty"`
 	CacheReadPricePer1MTokensUSD    *float64 `json:"cache_read_price_per_1m_tokens_usd,omitempty"`
 	CacheWritePricePer1MTokensUSD   *float64 `json:"cache_write_price_per_1m_tokens_usd,omitempty"`
-	// Image models use a fixed per-image price or three token rates plus a
+	// Image models use three token rates plus a
 	// maximum per image. The maximum excludes any account surcharge.
 	ImageInputPricePer1MTokensCents *int64   `json:"image_input_price_per_1m_tokens_cents,omitempty"`
 	ImageInputPricePer1MTokensUSD   *float64 `json:"image_input_price_per_1m_tokens_usd,omitempty"`
 	ImageMaxCostPerImageCents       *float64 `json:"image_max_cost_per_image_cents,omitempty"`
-	PricePerImageCents              *float64 `json:"price_per_image_cents,omitempty"`
-	PricePerImageUSD                *float64 `json:"price_per_image_usd,omitempty"`
 	// Capabilities is what the operator states the model accepts, using
 	// models.dev field names. A missing field means not stated.
 	Capabilities  json.RawMessage `json:"capabilities,omitempty"`
