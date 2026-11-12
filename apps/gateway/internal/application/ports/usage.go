@@ -20,3 +20,8 @@ type UsageMeter interface {
 type ReservationKeeper interface {
 	KeepReservation(context.Context, string, func()) func()
 }
+
+// UsageReceiptMeter returns the authoritative charge receipt for image responses.
+type UsageReceiptMeter interface {
+	CompleteWithReceipt(context.Context, string, domain.GenerateResult, domain.PublicModel, int64) (*int64, error)
+}

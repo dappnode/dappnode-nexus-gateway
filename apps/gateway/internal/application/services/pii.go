@@ -105,6 +105,21 @@ func (m *requestPIIMasker) maskBody(body map[string]any, endpoint string) error 
 		}
 		return nil
 	}
+	if endpoint == domain.EndpointImageGenerations {
+		// The prompt is drawn, not answered: placeholders stay in the image.
+		for _, field := range []string{"prompt", "user"} {
+			text, ok := body[field].(string)
+			if !ok {
+				continue
+			}
+			masked, err := m.maskText(field, text)
+			if err != nil {
+				return err
+			}
+			body[field] = masked
+		}
+		return nil
+	}
 	if user, ok := body["user"].(string); ok {
 		masked, err := m.maskText("user", user)
 		if err != nil {

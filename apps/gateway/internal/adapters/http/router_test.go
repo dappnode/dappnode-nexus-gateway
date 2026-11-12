@@ -24,6 +24,7 @@ func TestNewRouter_PreservesLegacyChatRouteWithoutConfidentialHandler(t *testing
 		handlers.NewHealthHandler(),
 		handlers.NewModelsHandler(nil),
 		handlers.NewChatCompletionsHandler(nil, logger),
+		nil,
 		handlers.NewSystemOneHandler(nil, logger),
 		nil,
 		nil,
@@ -63,7 +64,7 @@ func TestNewRouter_PreservesLegacyChatRouteWithoutConfidentialHandler(t *testing
 // in between hands the mux a copy of the request.
 func TestNewRouter_LabelsMetricsWithTheMatchedRoute(t *testing.T) {
 	logger := &routerTestLogger{}
-	router := NewRouter(handlers.NewHealthHandler(), handlers.NewModelsHandler(nil), handlers.NewChatCompletionsHandler(nil, logger), nil, nil, nil, nil, logger)
+	router := NewRouter(handlers.NewHealthHandler(), handlers.NewModelsHandler(nil), handlers.NewChatCompletionsHandler(nil, logger), nil, nil, nil, nil, nil, logger)
 	health := metrics.HTTPRequestsTotal.WithLabelValues("GET /healthz", http.MethodGet, "2xx")
 	unmatched := metrics.HTTPRequestsTotal.WithLabelValues("unmatched", http.MethodGet, "4xx")
 	healthBefore, unmatchedBefore := testutil.ToFloat64(health), testutil.ToFloat64(unmatched)

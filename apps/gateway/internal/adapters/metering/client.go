@@ -59,6 +59,7 @@ func (c *Client) Reserve(ctx context.Context, auth domain.AuthContext, endpoint 
 		Stream:                 req.Stream,
 		MaxOutputTokens:        req.MaxOutputTokens,
 		EstimatedInputTokens:   req.EstimatedInputTokens,
+		Images:                 req.Images,
 	}
 	var res reserveResponse
 	sent := time.Now() // A lease measured from here never outlasts Metering's.
@@ -75,6 +76,11 @@ func (c *Client) Reserve(ctx context.Context, auth domain.AuthContext, endpoint 
 }
 
 func (c *Client) RecordSuccess(ctx context.Context, reservationID string, _ domain.AuthContext, _ string, _ domain.GenerateRequest, resp domain.GenerateResult, model domain.PublicModel, latencyMs int64) error {
+	_, err := c.CompleteWithReceipt(ctx, reservationID, resp, model, latencyMs)
+	return err
+}
+
+func (c *Client) CompleteWithReceipt(ctx context.Context, reservationID string, resp domain.GenerateResult, model domain.PublicModel, latencyMs int64) (*int64, error) {
 	providerName := resp.ProviderName
 	if providerName == "" {
 		providerName = model.ProviderConfig.ProviderName
@@ -92,7 +98,8 @@ func (c *Client) RecordSuccess(ctx context.Context, reservationID string, _ doma
 		LatencyMs:         latencyMs,
 	}
 	var res completeResponse
-	return c.postJSON(ctx, "/internal/metering/reservations/"+reservationID+"/complete", payload, &res, 2)
+	err := c.postJSON(ctx, "/internal/metering/reservations/"+reservationID+"/complete", payload, &res, 2)
+	return res.ChargedMicrocents, err
 }
 
 func (c *Client) RecordFailure(ctx context.Context, reservationID *string, auth *domain.AuthContext, endpoint string, req *domain.GenerateRequest, model *domain.PublicModel, err error, partialUsage *domain.Usage, latencyMs int64) error {
@@ -422,6 +429,7 @@ type reserveRequest struct {
 	Stream                 bool                          `json:"stream"`
 	MaxOutputTokens        *int                          `json:"max_output_tokens,omitempty"`
 	EstimatedInputTokens   *int64                        `json:"estimated_input_tokens,omitempty"`
+	Images                 *int                          `json:"images,omitempty"`
 }
 
 type reserveResponse struct {
@@ -439,7 +447,8 @@ type completeRequest struct {
 }
 
 type completeResponse struct {
-	UsageEventID string `json:"usage_event_id,omitempty"`
+	ChargedMicrocents *int64 `json:"charged_microcents,omitempty"`
+	UsageEventID      string `json:"usage_event_id,omitempty"`
 }
 
 type failureRequest struct {

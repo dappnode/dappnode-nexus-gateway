@@ -1,6 +1,6 @@
 module github.com/dappnode/dappnode-nexus-gateway
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/0xsequence/nsm v0.1.0
@@ -16,9 +16,10 @@ require (
 	github.com/tinfoilsh/encrypted-http-body-protocol v0.2.6
 	github.com/tinfoilsh/tinfoil-go v0.13.1
 	go.uber.org/zap v1.28.0
+	golang.org/x/image v0.48.0
 	golang.org/x/net v0.60.0
-	golang.org/x/sync v0.23.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/sync v0.25.0
+	golang.org/x/sys v0.50.0
 )
 
 require (
@@ -111,9 +112,9 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.83.2 // indirect

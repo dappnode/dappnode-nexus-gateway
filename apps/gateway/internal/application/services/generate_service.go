@@ -28,6 +28,10 @@ type GenerateService struct {
 	logger        ports.Logger
 	// guestMaxOutputTokens is the output limit of guest chat requests.
 	guestMaxOutputTokens int
+	// Image generation: see SetImageOptions and GenerateImages.
+	imageTimeout time.Duration
+	imageJobs    *accountSlots
+	idempotency  *idempotencyStore
 }
 
 func NewGenerateService(
@@ -50,6 +54,10 @@ func NewGenerateService(
 		logger:   logger,
 
 		guestMaxOutputTokens: DefaultGuestMaxOutputTokens,
+
+		imageTimeout: DefaultImageTimeout,
+		imageJobs:    newAccountSlots(DefaultImageConcurrency),
+		idempotency:  newIdempotencyStore(),
 	}
 }
 
