@@ -29,29 +29,24 @@ func TestModelsHandler_PublishesCapabilitiesUnchanged(t *testing.T) {
 }
 
 func TestToPublicModelData_ImageModel(t *testing.T) {
-	price := decimal.RequireFromString("0.015")
+	rate := decimal.RequireFromString("1.5")
+	cap := decimal.RequireFromString("0.50360083")
 	data := toPublicModelData(domain.PublicModel{
-		PublicModelID: "flux", Currency: "EUR",
-		SupportsImageGenerations: true, PricePerImage: &price,
+		PublicModelID: "minimax/h3-image", Currency: "EUR", UpstreamModelName: "MiniMax-H3-Image",
+		ProviderConfig:           domain.ProviderConfig{ProviderName: "minimax"},
+		SupportsImageGenerations: true, ImageInputPricePerMillion: &rate, ImageMaxCostPerImage: &cap,
+		InputPricePerMillion: decimal.NewFromInt(2), OutputPricePerMillion: decimal.NewFromInt(4),
 	}, 1.1)
-	if len(data.Endpoints) != 1 || data.Endpoints[0] != "images/generations" {
-		t.Fatalf("endpoints = %v, want images/generations", data.Endpoints)
+	if len(data.Endpoints) != 2 || data.Endpoints[0] != "images/generations" || data.Endpoints[1] != "images/edits" {
+		t.Fatalf("endpoints = %v", data.Endpoints)
 	}
-	if data.PricePerImageCents == nil || *data.PricePerImageCents != 1.5 {
-		t.Fatalf("price per image = %v cents, want 1.5", data.PricePerImageCents)
+	if data.ImageInputPricePer1MTokensCents == nil || *data.ImageInputPricePer1MTokensCents != 150 {
+		t.Fatalf("reference token rate = %v", data.ImageInputPricePer1MTokensCents)
 	}
-	if data.PricePerImageUSD == nil || *data.PricePerImageUSD != 0.0165 {
-		t.Fatalf("price per image = %v USD, want 0.0165", data.PricePerImageUSD)
+	if data.ImageMaxCostPerImageCents == nil || *data.ImageMaxCostPerImageCents != 50.360083 {
+		t.Fatalf("ceiling precision = %v", data.ImageMaxCostPerImageCents)
 	}
-	if data.ContextSize != nil || data.InputPricePer1MTokensCents != nil {
-		t.Fatal("an image model publishes no context size or token prices")
-	}
-}
-
-func TestToPublicModelData_ImagePricePreservesMicrocents(t *testing.T) {
-	price := decimal.RequireFromString("0.00360083")
-	data := toPublicModelData(domain.PublicModel{Currency: "EUR", SupportsImageGenerations: true, PricePerImage: &price}, 1)
-	if data.PricePerImageCents == nil || *data.PricePerImageCents != 0.360083 {
-		t.Fatalf("price = %v, want 0.360083 cents", data.PricePerImageCents)
+	if data.ContextSize != nil || data.InputPricePer1MTokensCents == nil || *data.InputPricePer1MTokensCents != 200 {
+		t.Fatal("image model needs token prices and no context size")
 	}
 }

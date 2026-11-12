@@ -203,23 +203,17 @@ func (s *GenerateService) generateImages(ctx context.Context, authCtx domain.Aut
 		return nil, err
 	}
 
-	usage := &domain.Usage{Images: count}
-	if model.SupportsImageEdits() {
-		var upstream struct {
-			Usage json.RawMessage `json:"usage"`
-		}
-		_ = json.Unmarshal(providerBody, &upstream)
-		usage.ProviderUsage = upstream.Usage
-		if model.ImageInputPricePerMillion != nil {
-			normalized, ok := domain.ParseImageTokenUsage(upstream.Usage, count)
-			if !ok {
-				err := domain.ErrProviderError(http.StatusBadGateway, "provider returned missing or inconsistent image token usage")
-				s.recordFailure(ctx, &reservationID, &authCtx, endpoint, &req, &model, err, nil, latencyMs)
-				return nil, err
-			}
-			usage = &normalized
-		}
+	var upstream struct {
+		Usage json.RawMessage `json:"usage"`
 	}
+	_ = json.Unmarshal(providerBody, &upstream)
+	normalized, ok := domain.ParseImageTokenUsage(upstream.Usage, count)
+	if !ok {
+		err := domain.ErrProviderError(http.StatusBadGateway, "provider returned missing or inconsistent image token usage")
+		s.recordFailure(ctx, &reservationID, &authCtx, endpoint, &req, &model, err, nil, latencyMs)
+		return nil, err
+	}
+	usage := &normalized
 	result := domain.GenerateResult{
 		PublicModelID: executed.PublicModelID, ProviderName: executed.ProviderConfig.ProviderName,
 		ProviderModelID: executed.ProviderModelID, Usage: usage,

@@ -69,7 +69,7 @@ print(response.choices[0].message.content)
 | --- | --- |
 | `GET /v1/models` | Lists the available models, prices and capabilities. |
 | `POST /v1/chat/completions` | Creates chat completions; supports streaming. |
-| `POST /v1/images/generations` | Generates images with image models (OpenAI images API, inline `b64_json` only; Image-01 per image, H3 per token; `Idempotency-Key` supported). |
+| `POST /v1/images/generations` | Generates images with image models (OpenAI images API, inline `b64_json` only; H3 per token; `Idempotency-Key` supported). |
 
 Supported capabilities depend on the selected model and can include streaming,
 tool calls, parallel tool calls, structured outputs and reasoning. The current
@@ -97,7 +97,7 @@ Image generation follows the OpenAI images API: `model`, `prompt`, and `n`
 the provider refuses returns 422 `content_policy_violation` and costs
 nothing. Send an `Idempotency-Key` header to retry safely: a retry of a
 finished request returns the same images without a second charge.
-`IMAGE_GENERATION_TIMEOUT_SECONDS` (default 120) bounds one generation and
+`IMAGE_GENERATION_TIMEOUT_SECONDS` (default 660) bounds one generation and
 `IMAGE_GENERATION_CONCURRENCY_PER_ACCOUNT` (default 2) how many one account
 runs at once. Operator notes are in the Nexus repository's
 `docs/image-generation.md`.
@@ -164,7 +164,7 @@ output. An invalid value stops the gateway at startup. The Nexus repository's
 
 ### Image billing
 
-Image-01 uses a fixed retail price per successful image. H3 uses separate retail
+H3 uses separate retail
 rates for text input, reference-image input and image output tokens. Model discovery
 publishes `image_input_price_per_1m_tokens_cents` alongside text-input/output rates,
 and `image_max_cost_per_image_cents` for the maximum base charge and credit hold.
