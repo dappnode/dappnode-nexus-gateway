@@ -60,7 +60,7 @@ func TestRuntimeClientAuthenticateReadsTheGuestFlag(t *testing.T) {
 		account string
 		want    bool
 	}{
-		{`{"id":"acc-1","status":"active","is_guest":true}`, true},
+		{`{"id":"acc-1","status":"active","is_guest":true,"guest_max_output_tokens":4096}`, true},
 		{`{"id":"acc-1","status":"active","is_guest":false}`, false},
 		{`{"id":"acc-1","status":"active"}`, false},
 	} {
@@ -71,6 +71,9 @@ func TestRuntimeClientAuthenticateReadsTheGuestFlag(t *testing.T) {
 		server.Close()
 		if err != nil {
 			t.Fatalf("AuthenticateAPIKey: %v", err)
+		}
+		if tc.want && auth.Account.GuestMaxOutputTokens != 4096 {
+			t.Fatalf("runtime guest output cap = %d, want 4096", auth.Account.GuestMaxOutputTokens)
 		}
 		if auth.Account.IsGuest != tc.want {
 			t.Fatalf("account %s: IsGuest = %v, want %v", tc.account, auth.Account.IsGuest, tc.want)

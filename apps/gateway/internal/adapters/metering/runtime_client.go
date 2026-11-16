@@ -30,10 +30,11 @@ func (c *Client) AuthenticateAPIKey(ctx context.Context, rawKey string) (domain.
 	}
 	return domain.AuthContext{
 		Account: domain.Account{
-			ID:                 response.Account.ID,
-			ExternalCustomerID: response.Account.ExternalCustomerID,
-			Status:             response.Account.Status,
-			IsGuest:            response.Account.IsGuest,
+			ID:                   response.Account.ID,
+			ExternalCustomerID:   response.Account.ExternalCustomerID,
+			Status:               response.Account.Status,
+			IsGuest:              response.Account.IsGuest,
+			GuestMaxOutputTokens: response.Account.GuestMaxOutputTokens,
 		},
 		APIKey: domain.APIKey{
 			ID:         response.APIKey.ID,
@@ -434,10 +435,11 @@ type authenticateResponse struct {
 }
 
 type runtimeAccount struct {
-	ID                 string  `json:"id"`
-	ExternalCustomerID *string `json:"external_customer_id,omitempty"`
-	Status             string  `json:"status"`
-	IsGuest            bool    `json:"is_guest"`
+	ID                   string  `json:"id"`
+	ExternalCustomerID   *string `json:"external_customer_id,omitempty"`
+	Status               string  `json:"status"`
+	IsGuest              bool    `json:"is_guest"`
+	GuestMaxOutputTokens int     `json:"guest_max_output_tokens,omitempty"`
 }
 
 type runtimeAPIKey struct {

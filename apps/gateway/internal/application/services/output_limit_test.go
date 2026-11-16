@@ -40,6 +40,21 @@ func sentField(t *testing.T, raw, field string) any {
 	return body[field]
 }
 
+func TestProxy_GuestRuntimeOutputLimitOverridesDeploymentFallback(t *testing.T) {
+	for _, limit := range []int{25, 100} {
+		meter, provider := &stubUsageMeter{}, &stubProvider{}
+		svc := newGuestTestService(meter, provider, true)
+		svc.auth.(*stubAuthService).authCtx.Account.GuestMaxOutputTokens = limit
+		proxyChat(t, svc, `{"model":"model","messages":[{"role":"user","content":"hi"}]}`)
+		if got := sentField(t, provider.lastRaw, "max_completion_tokens"); got != float64(limit) {
+			t.Fatalf("output limit = %v, want %d", got, limit)
+		}
+		if got := meter.lastReserveReq.MaxOutputTokens; got == nil || *got != limit {
+			t.Fatalf("reservation does not use runtime limit %d", limit)
+		}
+	}
+}
+
 // A guest's chat request reaches the provider with an output limit no larger
 // than the guest limit (50 here), and Metering holds credit for that limit.
 // Other accounts' requests keep their own limit, or none.
