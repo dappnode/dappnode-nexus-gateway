@@ -34,6 +34,8 @@ type Account struct {
 	// login, funded with a small credit. Its chat requests get a smaller output
 	// limit than other accounts' (see services.capOutput).
 	IsGuest bool
+	// GuestMaxOutputTokens comes from runtime admin settings; zero uses the deployment fallback.
+	GuestMaxOutputTokens int
 }
 
 // IsActive returns true if the account status is "active".

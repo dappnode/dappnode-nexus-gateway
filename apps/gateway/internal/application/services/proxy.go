@@ -59,7 +59,11 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 	if authCtx.Account.IsGuest {
 		err := s.checkGuestModel(ctx, endpoint, req.PublicModelID)
 		if err == nil {
-			raw, req, err = capOutput(raw, req, s.guestMaxOutputTokens)
+			limit := authCtx.Account.GuestMaxOutputTokens
+			if limit <= 0 {
+				limit = s.guestMaxOutputTokens
+			}
+			raw, req, err = capOutput(raw, req, limit)
 		}
 		if err != nil {
 			err = clientGone(ctx, err)
