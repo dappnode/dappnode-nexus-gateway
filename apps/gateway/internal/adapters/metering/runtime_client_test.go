@@ -434,7 +434,7 @@ func TestRuntimeClientMapsModelPricesWithoutPrecisionLoss(t *testing.T) {
 			"input_price_per_1m_tokens_microcents":75000000,
 			"output_price_per_1m_tokens_microcents":450000000,
 			"cache_read_price_per_1m_tokens_microcents":12500000,
-			"currency":"EUR","active":true
+			"created_at":"2026-11-15T12:00:00Z","currency":"EUR","active":true
 		}`))
 	}))
 	defer server.Close()
@@ -442,6 +442,9 @@ func TestRuntimeClientMapsModelPricesWithoutPrecisionLoss(t *testing.T) {
 	model, err := NewClient(server.URL, "", time.Second).GetPublicModel(context.Background(), "openai/gpt-test")
 	if err != nil {
 		t.Fatalf("GetPublicModel: %v", err)
+	}
+	if !model.CreatedAt.Equal(time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("created_at = %v", model.CreatedAt)
 	}
 	if model.InputPricePerMillion.String() != "0.75" || model.OutputPricePerMillion.String() != "4.5" {
 		t.Fatalf("prices = (%s, %s)", model.InputPricePerMillion, model.OutputPricePerMillion)

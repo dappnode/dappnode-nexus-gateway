@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/shopspring/decimal"
 )
@@ -32,6 +33,7 @@ type ProviderTarget struct {
 
 // PublicModel is the fully-resolved model exposed by the gateway.
 type PublicModel struct {
+	CreatedAt               time.Time
 	ID                      string
 	PublicModelID           string
 	DisplayName             string

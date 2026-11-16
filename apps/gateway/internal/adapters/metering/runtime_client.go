@@ -353,6 +353,7 @@ func (m runtimePublicModel) capabilities() json.RawMessage {
 
 func (m runtimePublicModel) toDomain() domain.PublicModel {
 	model := domain.PublicModel{
+		CreatedAt:               m.CreatedAt,
 		ID:                      m.ID,
 		PublicModelID:           m.PublicModelID,
 		DisplayName:             m.DisplayName,
@@ -450,6 +451,7 @@ type runtimeAPIKey struct {
 }
 
 type runtimePublicModel struct {
+	CreatedAt                     time.Time              `json:"created_at"`
 	ID                            string                 `json:"id"`
 	PublicModelID                 string                 `json:"public_model_id"`
 	DisplayName                   string                 `json:"display_name"`

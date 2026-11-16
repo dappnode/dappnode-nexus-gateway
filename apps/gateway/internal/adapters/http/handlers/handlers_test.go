@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/handlers"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/application/services"
@@ -107,11 +108,13 @@ func TestModelsHandler_NoAuthRequired(t *testing.T) {
 }
 
 func TestModelsHandler_ListsModels(t *testing.T) {
+	createdAt := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 	desc := "GPT-4.1 Mini model"
 	catalog := &mockModelCatalog{
 		models: []domain.PublicModel{
 			{
 				PublicModelID:           "openai/gpt-4.1-mini",
+				CreatedAt:               createdAt,
 				DisplayName:             "GPT-4.1 Mini",
 				Description:             &desc,
 				ProviderConfig:          domain.ProviderConfig{ProviderName: "openai"},
@@ -154,6 +157,7 @@ func TestModelsHandler_ListsModels(t *testing.T) {
 		Object string `json:"object"`
 		Data   []struct {
 			ID                          string          `json:"id"`
+			Created                     int64           `json:"created"`
 			Object                      string          `json:"object"`
 			OwnedBy                     string          `json:"owned_by"`
 			DisplayName                 string          `json:"display_name"`
@@ -178,6 +182,12 @@ func TestModelsHandler_ListsModels(t *testing.T) {
 		t.Fatalf("data len = %d, want 2", len(body.Data))
 	}
 	first := body.Data[0]
+	if first.Created != createdAt.Unix() {
+		t.Errorf("created = %d, want %d", first.Created, createdAt.Unix())
+	}
+	if body.Data[1].Created != 0 {
+		t.Errorf("missing creation date = %d, want 0", body.Data[1].Created)
+	}
 	if first.ID != "openai/gpt-4.1-mini" {
 		t.Errorf("data[0].id = %s, want openai/gpt-4.1-mini", first.ID)
 	}
