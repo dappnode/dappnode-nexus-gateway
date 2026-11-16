@@ -62,6 +62,11 @@ func NewAdapterWithFactory(timeout time.Duration, factory VerifiedClientFactory,
 	return &Adapter{timeout: timeout, factory: factory, logger: l}
 }
 
+// AttestedTransport reports that every request is sent only through a client
+// that has verified the Tinfoil enclave's attestation, over EHBP to the key
+// that attestation binds, and that verification failure sends nothing.
+func (a *Adapter) AttestedTransport() bool { return true }
+
 func missingProviderCredentialError() *domain.GatewayError {
 	return domain.ErrInternal("an internal error occurred").WithMeta(
 		"provider", providerName,

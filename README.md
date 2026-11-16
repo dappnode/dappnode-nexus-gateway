@@ -145,6 +145,18 @@ shared across its API keys; excess requests return 429 with
 Live entries are never evicted to admit new requests. Metrics bind to loopback
 in Nitro builds and retain their internal-network listener in ordinary builds.
 
+A confidential request may set `"require_attested_inference": true` in its
+encrypted envelope, next to `schema_version`, `request_id`, `issued_at` and
+`request`. The enclave then lets only attested code read the prompt: itself
+and a provider whose attestation it verifies before sending anything (today,
+Tinfoil). It refuses routers such as `nexus/auto`, which send the prompt to
+the Router, skips PII masking, which sends it to the analyzer, and never falls
+back to a provider without that verification. A request it can't serve that
+way returns 422 `attested_inference_unavailable` and nothing is sent upstream.
+The field is inside the encrypted body, so nothing between the client and the
+enclave can add or remove it, and a Gateway that predates it rejects the
+envelope rather than ignoring it.
+
 PII masking covers conversation text, tool results, assistant reasoning, tool-call
 argument string values, and `user`. Tool definitions, names, IDs, schemas,
 metadata, provider options, and image/audio content are not scanned. Keep

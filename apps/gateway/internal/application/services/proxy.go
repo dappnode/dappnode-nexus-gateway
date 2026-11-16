@@ -72,6 +72,15 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 			return nil, reject(err, nil)
 		}
 	}
+	// Only the confidential chat endpoint can set this; see
+	// domain.WithAttestedInference.
+	attested := domain.AttestedInferenceRequired(ctx)
+	if attested && endpoint != domain.EndpointChatCompletions {
+		err := domain.ErrAttestedInferenceUnavailable(req.PublicModelID)
+		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, req, nil, time.Since(start).Milliseconds())
+		s.recordError(endpoint, req, nil, metrics.PhaseRequest, err)
+		return nil, reject(err, nil)
+	}
 	var model domain.PublicModel
 	execReq := req
 	if endpoint == domain.EndpointSystemOne {
@@ -91,13 +100,27 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
 		return nil, reject(err, &model)
 	}
-	masked, mapping, err := s.maskBody(ctx, raw, authCtx.APIKey.PIIMode, endpoint)
-	if err != nil {
-		err = clientGone(ctx, err)
+	// Refused before any credit is held; attempt checks every target again.
+	if attested && !s.attestedTarget(model.ProviderConfig.ProviderName) {
+		err := domain.ErrAttestedInferenceUnavailable(execReq.PublicModelID).WithMeta("provider", model.ProviderConfig.ProviderName)
 		s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
 		s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
 		s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
 		return nil, reject(err, &model)
+	}
+	// Masking sends the prompt to the PII analyzer, which is not attested code,
+	// so attested inference skips it: only attested code reads that prompt.
+	masked, mapping := raw, (*domain.PIIMapping)(nil)
+	if !attested {
+		var err error
+		masked, mapping, err = s.maskBody(ctx, raw, authCtx.APIKey.PIIMode, endpoint)
+		if err != nil {
+			err = clientGone(ctx, err)
+			s.recordTerminalOutcome(metrics.OutcomeError, endpoint, execReq, &model, time.Since(start).Milliseconds())
+			s.recordError(endpoint, execReq, &model, metrics.PhaseRequest, err)
+			s.recordFailure(ctx, nil, &authCtx, endpoint, &execReq, &model, err, nil, time.Since(start).Milliseconds())
+			return nil, reject(err, &model)
+		}
 	}
 	// The hold covers the prompt as sent upstream, after masking.
 	if tokens, ok := estimateInputTokens(endpoint, masked); ok {
@@ -150,12 +173,19 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 			return nil, domain.ErrProviderUnavailable(target.ProviderConfig.ProviderName).WithMeta(
 				"fault", domain.FaultNexus, "cause", domain.CauseProviderNotRegistered)
 		}
+		if attested && !attestedTransport(provider) {
+			return nil, domain.ErrAttestedInferenceUnavailable(execReq.PublicModelID).WithMeta(
+				"provider", target.ProviderConfig.ProviderName)
+		}
 		upstreamStart := time.Now()
 		if !execReq.Stream {
 			body, proof, err := provider.Complete(ctx, masked, target)
 			recordUpstreamLatency(execReq.PublicModelID, target.ProviderConfig.ProviderName, upstreamStart, err)
 			if err != nil {
 				return nil, err
+			}
+			if attested && proof == nil {
+				return nil, errMissingTransportProof(target)
 			}
 			var rewritten []byte
 			var o outcome
@@ -176,6 +206,10 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		if err != nil {
 			return nil, err
 		}
+		if attested && resp.Proof == nil {
+			resp.Body.Close()
+			return nil, errMissingTransportProof(target)
+		}
 		stream := newProxyStream(resp.Body, target.PublicModelID)
 		stream.proof = resp.Proof
 		stream.hideUsage = !wantsUsage(raw)
@@ -193,7 +227,8 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 	call, err := attempt(model)
 	executed := model
 	if err != nil && clientCtx.Err() == nil && shouldTryFallback(ctx, err, model.Fallback) &&
-		withProviderTarget(model, *model.Fallback).SupportsEndpoint(endpoint) {
+		withProviderTarget(model, *model.Fallback).SupportsEndpoint(endpoint) &&
+		(!attested || s.attestedTarget(model.Fallback.ProviderConfig.ProviderName)) {
 		executed = withProviderTarget(model, *model.Fallback)
 		s.logFallback(requestID, model, executed, sanitizeErrorWithPIIMapping(err, mapping))
 		metrics.RecordFallback(endpoint, model.PublicModelID, model.ProviderConfig.ProviderName, executed.ProviderConfig.ProviderName, err)
@@ -213,6 +248,28 @@ func (s *GenerateService) Proxy(ctx context.Context, endpoint string, raw []byte
 		return nil, err
 	}
 	return call, nil
+}
+
+// attestedTransport reports whether a provider adapter verifies its upstream's
+// attestation before sending anything; see ports.AttestedProvider.
+func attestedTransport(provider ports.Provider) bool {
+	attested, ok := provider.(ports.AttestedProvider)
+	return ok && attested.AttestedTransport()
+}
+
+// attestedTarget reports whether the named provider is served by an adapter
+// with an attested transport.
+func (s *GenerateService) attestedTarget(providerName string) bool {
+	provider, err := s.registry.GetProvider(providerName)
+	return err == nil && attestedTransport(provider)
+}
+
+// errMissingTransportProof is an attested adapter that returned no proof of
+// the transport it used. Attested inference fails closed on it, so the answer
+// is discarded rather than delivered without evidence.
+func errMissingTransportProof(target domain.PublicModel) *domain.GatewayError {
+	return domain.ErrProviderUnavailable(target.ProviderConfig.ProviderName).WithMeta(
+		"fault", domain.FaultNexus, "reason", "attested provider returned no transport proof")
 }
 
 // outcome is what the gateway read from a proxied response.

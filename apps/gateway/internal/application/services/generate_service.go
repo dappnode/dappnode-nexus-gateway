@@ -147,6 +147,11 @@ func (s *GenerateService) resolveModel(ctx context.Context, req domain.GenerateR
 		}
 		return domain.PublicModel{}, req, routerErr
 	}
+	// The Router reads the prompt to choose a model, and it runs outside the
+	// enclave, so attested inference never calls it.
+	if domain.AttestedInferenceRequired(ctx) {
+		return domain.PublicModel{}, req, domain.ErrAttestedInferenceUnavailable(requestedModelID)
+	}
 	if s.router == nil {
 		return domain.PublicModel{}, req, domain.ErrInternal("an internal error occurred").WithMeta(
 			"dependency", "router",

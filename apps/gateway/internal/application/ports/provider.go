@@ -18,6 +18,16 @@ type Provider interface {
 	Complete(ctx context.Context, raw []byte, model domain.PublicModel) ([]byte, *domain.TinfoilTransportProof, error)
 }
 
+// AttestedProvider is a provider adapter that sends a request only after it
+// has verified the provider's hardware attestation, encrypted to a key bound
+// to that attestation, so the provider's operator can't read the prompt
+// either. It must fail closed: no verification, no request. Requests that
+// require attested inference (domain.AttestedInferenceRequired) are sent only
+// to providers whose adapter reports true.
+type AttestedProvider interface {
+	AttestedTransport() bool
+}
+
 // ImageProvider generates images through the OpenAI images API. A provider
 // adapter that doesn't implement it can't serve image models.
 type ImageProvider interface {
