@@ -53,13 +53,17 @@ func toPublicModelData(m domain.PublicModel, eurToUSDRate float64) dto.ModelData
 	inputPrice := eurToCents(m.InputPricePerMillion)
 	outputPrice := eurToCents(m.OutputPricePerMillion)
 	proofMode := m.EffectiveProofMode()
+	created := int64(0)
+	if !m.CreatedAt.IsZero() {
+		created = m.CreatedAt.Unix()
+	}
 	data := dto.ModelData{
 		ID:                              m.PublicModelID,
 		Object:                          "model",
 		Kind:                            string(domain.CatalogKindPublicModel),
 		BaseModel:                       privateBaseModel(m.PublicModelID, m.UpstreamModelName),
 		OwnedBy:                         "nexus",
-		Created:                         0,
+		Created:                         created,
 		DisplayName:                     m.DisplayName,
 		Description:                     m.Description,
 		ContextSize:                     &m.MaxContextWindow,
