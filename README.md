@@ -151,7 +151,8 @@ encrypted envelope, next to `schema_version`, `request_id`, `issued_at` and
 and a provider whose attestation it verifies before sending anything (today,
 Tinfoil). It refuses routers such as `nexus/auto`, which send the prompt to
 the Router, skips PII masking, which sends it to the analyzer, and never falls
-back to a provider without that verification. A request it can't serve that
+back to a provider without that verification. Nor does it store a Tinfoil
+proof of the request: the client keeps its own. A request it can't serve that
 way returns 422 `attested_inference_unavailable` and nothing is sent upstream.
 The field is inside the encrypted body, so nothing between the client and the
 enclave can add or remove it, and a Gateway that predates it rejects the

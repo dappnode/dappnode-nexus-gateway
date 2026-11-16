@@ -339,6 +339,12 @@ func (s *GenerateService) storeTinfoilProof(ctx context.Context, auth domain.Aut
 	if s == nil || s.tinfoilProofs == nil || model.EffectiveProofMode() != domain.ProofModeTinfoilAttestedTransport {
 		return
 	}
+	// The client of an attested-inference request verifies this enclave
+	// itself and keeps its own proof; a server copy would only be a lasting
+	// record of who used a private model when.
+	if domain.AttestedInferenceRequired(ctx) {
+		return
+	}
 	if result.TinfoilProof == nil {
 		if s.logger != nil {
 			s.logger.Warn("Tinfoil proof mode enabled but provider returned no proof evidence",

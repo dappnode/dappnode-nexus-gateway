@@ -157,6 +157,43 @@ func TestAttestedInference_SendsToAttestedProviderWithoutPIIAnalyzer(t *testing.
 	}
 }
 
+// recordingProofs records the Tinfoil proofs the gateway stores.
+type recordingProofs struct{ stored int }
+
+func (r *recordingProofs) UpsertTinfoilTransportProof(context.Context, domain.TinfoilTransportProof) error {
+	r.stored++
+	return nil
+}
+
+func (r *recordingProofs) GetTinfoilTransportProof(context.Context, string, string) (domain.TinfoilTransportProof, error) {
+	return domain.TinfoilTransportProof{}, nil
+}
+
+func TestAttestedInference_StoresNoServerProof(t *testing.T) {
+	for _, attested := range []bool{true, false} {
+		setup := newAttestedTestService()
+		proofs := &recordingProofs{}
+		setup.svc.SetTinfoilProofRepository(proofs)
+		catalog := setup.svc.catalog.(*stubModelCatalog)
+		model := catalog.models["private/model"]
+		model.ProofMode = domain.ProofModeTinfoilAttestedTransport
+		model.ProviderConfig.ProviderName = "tinfoil" // Tinfoil proof mode requires the Tinfoil provider.
+		catalog.models["private/model"] = model
+		setup.svc.registry = &stubProviderRegistry{providers: map[string]ports.Provider{"tinfoil": setup.attested, "plain": setup.plain}}
+
+		ctx := context.Background()
+		if attested {
+			ctx = domain.WithAttestedInference(ctx)
+		}
+		if _, err := setup.svc.Proxy(ctx, domain.EndpointChatCompletions, []byte(attestedTestPrompt), domain.GenerateRequest{PublicModelID: "private/model"}, "sk-test"); err != nil {
+			t.Fatalf("Proxy returned error: %v", err)
+		}
+		if want := map[bool]int{true: 0, false: 1}[attested]; proofs.stored != want {
+			t.Fatalf("attested=%v: stored proofs = %d, want %d", attested, proofs.stored, want)
+		}
+	}
+}
+
 func TestAttestedInference_WithoutTheRequirementMasksAsBefore(t *testing.T) {
 	setup := newAttestedTestService()
 
