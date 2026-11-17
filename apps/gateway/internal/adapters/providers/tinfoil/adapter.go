@@ -62,10 +62,23 @@ func NewAdapterWithFactory(timeout time.Duration, factory VerifiedClientFactory,
 	return &Adapter{timeout: timeout, factory: factory, logger: l}
 }
 
+// AttestedConfigRepo is the only code a Tinfoil enclave may run to serve
+// attested inference: Tinfoil's model router, as its GitHub release workflow
+// signs it. It is compiled in, so it is covered by this enclave's
+// measurements. TINFOIL_CONFIG_REPO is operator configuration outside them,
+// and a repo chosen there could be code that reads the prompt.
+const AttestedConfigRepo = "tinfoilsh/confidential-model-router"
+
 // AttestedTransport reports that every request is sent only through a client
 // that has verified the Tinfoil enclave's attestation, over EHBP to the key
-// that attestation binds, and that verification failure sends nothing.
-func (a *Adapter) AttestedTransport() bool { return true }
+// that attestation binds, and that verification failure sends nothing. It is
+// false when TINFOIL_CONFIG_REPO names another repo, so attested inference is
+// refused before any credit is held; newVerifiedClient checks the repo the
+// client actually verified.
+func (a *Adapter) AttestedTransport() bool {
+	repo := strings.TrimSpace(os.Getenv("TINFOIL_CONFIG_REPO"))
+	return repo == "" || repo == AttestedConfigRepo
+}
 
 func missingProviderCredentialError() *domain.GatewayError {
 	return domain.ErrInternal("an internal error occurred").WithMeta(
@@ -82,6 +95,15 @@ func (a *Adapter) newVerifiedClient(ctx context.Context, model domain.PublicMode
 	}
 	if verified == nil || verified.HTTPClient() == nil || verified.GroundTruth() == nil {
 		return nil, nil, domain.ErrProviderUnavailable(providerName).WithMeta("verification_error", "verified client returned no ground truth")
+	}
+	// Attested inference sends the prompt only to the pinned code. Nothing
+	// has been sent yet.
+	if domain.AttestedInferenceRequired(ctx) && verified.Repo() != AttestedConfigRepo {
+		return nil, nil, domain.ErrAttestedInferenceUnavailable(model.PublicModelID).WithMeta(
+			"provider", providerName,
+			"fault", domain.FaultNexus,
+			"reason", "Tinfoil enclave verified against an unpinned repository",
+		)
 	}
 	return verified, proofFromVerifiedClient(verified), nil
 }
