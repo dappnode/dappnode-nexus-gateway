@@ -147,6 +147,11 @@ func (s *GenerateService) resolveModel(ctx context.Context, req domain.GenerateR
 		}
 		return domain.PublicModel{}, req, routerErr
 	}
+	// The Router reads the prompt to choose a model, and it runs outside the
+	// enclave, so attested inference never calls it.
+	if domain.AttestedInferenceRequired(ctx) {
+		return domain.PublicModel{}, req, domain.ErrAttestedInferenceUnavailable(requestedModelID)
+	}
 	if s.router == nil {
 		return domain.PublicModel{}, req, domain.ErrInternal("an internal error occurred").WithMeta(
 			"dependency", "router",
@@ -332,6 +337,14 @@ func (s *GenerateService) buildErrorLogFields(ctx context.Context, requestID str
 
 func (s *GenerateService) storeTinfoilProof(ctx context.Context, auth domain.AuthContext, model domain.PublicModel, result domain.GenerateResult) {
 	if s == nil || s.tinfoilProofs == nil || model.EffectiveProofMode() != domain.ProofModeTinfoilAttestedTransport {
+		return
+	}
+	// The client of an attested-inference request verifies this enclave
+	// itself and keeps its own proof, so a server copy adds no evidence. It
+	// would keep each request's full verification record forever, beyond the
+	// usage Metering needs for billing. GET /tinfoil/proofs has nothing for
+	// these responses.
+	if domain.AttestedInferenceRequired(ctx) {
 		return
 	}
 	if result.TinfoilProof == nil {

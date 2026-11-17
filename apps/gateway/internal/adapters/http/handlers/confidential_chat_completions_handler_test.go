@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -264,6 +265,78 @@ func TestConfidentialChatCompletionsHandler_RejectsInvalidFreshnessAndReplay(t *
 	}
 	if calls != 1 {
 		t.Fatalf("downstream calls = %d, want exactly 1", calls)
+	}
+}
+
+// The attested-inference requirement travels inside the encrypted envelope,
+// so only the client that encrypted the request can set it, and the
+// downstream handler sees it only when it was asked for.
+func TestConfidentialChatCompletionsHandler_CarriesAttestedInferenceRequirement(t *testing.T) {
+	request := json.RawMessage(`{"model":"private/model","messages":[]}`)
+	envelopeWith := func(field string) []byte {
+		return []byte(fmt.Sprintf(`{"schema_version":%d,"request_id":%q,"issued_at":%q,"request":%s%s}`,
+			confidentialEnvelopeSchema, uuid.NewString(), time.Now().UTC().Format(time.RFC3339Nano), request, field))
+	}
+	tests := []struct {
+		name         string
+		envelope     []byte
+		wantStatus   int
+		wantRequired bool
+	}{
+		{name: "required", envelope: envelopeWith(`,"require_attested_inference":true`), wantStatus: http.StatusOK, wantRequired: true},
+		{name: "explicitly not required", envelope: envelopeWith(`,"require_attested_inference":false`), wantStatus: http.StatusOK},
+		{name: "absent", envelope: envelopeWith(""), wantStatus: http.StatusOK},
+		{name: "not a boolean", envelope: envelopeWith(`,"require_attested_inference":"yes"`), wantStatus: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls, required := 0, false
+			var body []byte
+			handler, clientIdentity := newConfidentialTestHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				required = domain.AttestedInferenceRequired(r.Context())
+				body, _ = io.ReadAll(r.Body)
+				_, _ = io.WriteString(w, "ok")
+			}))
+			encrypted, requestContext, _ := newEncryptedConfidentialRequest(t, clientIdentity, test.envelope)
+			recorder := httptest.NewRecorder()
+
+			handler.Handle(recorder, encrypted)
+			_ = decryptConfidentialResponse(t, recorder, requestContext)
+
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
+			}
+			if test.wantStatus != http.StatusOK {
+				if calls != 0 {
+					t.Fatalf("downstream calls = %d, want 0", calls)
+				}
+				return
+			}
+			if required != test.wantRequired {
+				t.Fatalf("attested inference required = %v, want %v", required, test.wantRequired)
+			}
+			if !bytes.Equal(body, request) {
+				t.Fatalf("downstream body = %s, want only the nested request %s", body, request)
+			}
+		})
+	}
+}
+
+// A plaintext request can't carry the requirement: the header is ignored and
+// the endpoint refuses plaintext before any handler runs.
+func TestConfidentialChatCompletionsHandler_PlaintextCannotRequestAttestedInference(t *testing.T) {
+	calls := 0
+	handler, _ := newConfidentialTestHandler(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
+	request := httptest.NewRequest(http.MethodPost, "/v1/confidential/chat/completions",
+		strings.NewReader(`{"schema_version":1,"require_attested_inference":true}`))
+	request.Header.Set("Authorization", "Bearer nexus-test-key")
+	recorder := httptest.NewRecorder()
+
+	handler.Handle(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest || calls != 0 {
+		t.Fatalf("status = %d, downstream calls = %d; want 400 and none", recorder.Code, calls)
 	}
 }
 

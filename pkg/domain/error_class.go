@@ -65,6 +65,8 @@ var faultByCode = map[string]string{
 	ErrCodeProviderRejectedRequest: FaultUnclear,
 	ErrCodeProviderConfiguration:   FaultNexus,
 	ErrCodeInternalError:           FaultNexus,
+
+	ErrCodeAttestedInferenceUnavailable: FaultCaller,
 }
 
 // FaultOf classifies an error. A "fault" in the metadata wins over the code,

@@ -214,6 +214,8 @@ func (f *fakeFactory) NewVerifiedClient(context.Context, domain.PublicModel) (Ve
 type fakeVerifiedClient struct {
 	httpClient  *http.Client
 	groundTruth *verifierclient.GroundTruth
+	// repo is the repository the client verified against; empty is Tinfoil's.
+	repo string
 }
 
 func fakeClient(httpClient *http.Client) *fakeVerifiedClient {
@@ -239,6 +241,9 @@ func (c *fakeVerifiedClient) Enclave() string {
 }
 
 func (c *fakeVerifiedClient) Repo() string {
+	if c.repo != "" {
+		return c.repo
+	}
 	return "tinfoilsh/confidential-model-router"
 }
 

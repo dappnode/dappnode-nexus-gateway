@@ -49,6 +49,11 @@ type confidentialEnvelope struct {
 	RequestID     string          `json:"request_id"`
 	IssuedAt      string          `json:"issued_at"`
 	Request       json.RawMessage `json:"request"`
+	// RequireAttestedInference asks that only attested code read the prompt:
+	// this enclave and a provider it verifies by attestation. See
+	// domain.WithAttestedInference. Gateways that predate the field reject
+	// the envelope as unknown, so asking for it never silently does nothing.
+	RequireAttestedInference bool `json:"require_attested_inference,omitempty"`
 }
 
 // NewConfidentialChatCompletionsHandler creates a strict encrypted handler.
@@ -195,6 +200,9 @@ func (h *ConfidentialChatCompletionsHandler) handleDecrypted(w http.ResponseWrit
 	// The downstream handler rechecks authentication and remains responsible for
 	// OpenAI validation, generation, and streaming. Only replace the
 	// decrypted envelope with its exact nested OpenAI request object.
+	if envelope.RequireAttestedInference {
+		r = r.WithContext(domain.WithAttestedInference(r.Context()))
+	}
 	r.Body = io.NopCloser(bytes.NewReader(envelope.Request))
 	r.ContentLength = int64(len(envelope.Request))
 	r.Header.Del("Content-Length")
