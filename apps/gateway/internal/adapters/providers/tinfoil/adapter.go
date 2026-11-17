@@ -72,12 +72,29 @@ const AttestedConfigRepo = "tinfoilsh/confidential-model-router"
 // AttestedTransport reports that every request is sent only through a client
 // that has verified the Tinfoil enclave's attestation, over EHBP to the key
 // that attestation binds, and that verification failure sends nothing. It is
-// false when TINFOIL_CONFIG_REPO names another repo, so attested inference is
-// refused before any credit is held; newVerifiedClient checks the repo the
+// false when the SDK will verify against another repo, so attested inference
+// is refused before any credit is held; newVerifiedClient checks the repo the
 // client actually verified.
 func (a *Adapter) AttestedTransport() bool {
-	repo := strings.TrimSpace(os.Getenv("TINFOIL_CONFIG_REPO"))
-	return repo == "" || repo == AttestedConfigRepo
+	return effectiveConfigRepo() == AttestedConfigRepo
+}
+
+func configuredRepo() string    { return strings.TrimSpace(os.Getenv("TINFOIL_CONFIG_REPO")) }
+func configuredEnclave() string { return strings.TrimSpace(os.Getenv("TINFOIL_ENCLAVE_HOST")) }
+func configuredBundleURL() string {
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("TINFOIL_ATTESTATION_BUNDLE_URL")), "/")
+}
+
+// effectiveConfigRepo is the repo SDKClientFactory's client verifies against.
+// tinfoil-go uses TINFOIL_CONFIG_REPO only with an enclave host or an
+// attestation bundle URL; otherwise it picks a router itself and verifies
+// Tinfoil's default repo.
+func effectiveConfigRepo() string {
+	repo := configuredRepo()
+	if repo == "" || (configuredEnclave() == "" && configuredBundleURL() == "") {
+		return AttestedConfigRepo
+	}
+	return repo
 }
 
 func missingProviderCredentialError() *domain.GatewayError {
@@ -97,10 +114,11 @@ func (a *Adapter) newVerifiedClient(ctx context.Context, model domain.PublicMode
 		return nil, nil, domain.ErrProviderUnavailable(providerName).WithMeta("verification_error", "verified client returned no ground truth")
 	}
 	// Attested inference sends the prompt only to the pinned code. Nothing
-	// has been sent yet.
+	// has been sent yet. AttestedTransport already refused a configured
+	// repo, so a mismatch here is the SDK verifying something else: Nexus's
+	// fault, not the request's.
 	if domain.AttestedInferenceRequired(ctx) && verified.Repo() != AttestedConfigRepo {
-		return nil, nil, domain.ErrAttestedInferenceUnavailable(model.PublicModelID).WithMeta(
-			"provider", providerName,
+		return nil, nil, domain.ErrProviderUnavailable(providerName).WithMeta(
 			"fault", domain.FaultNexus,
 			"reason", "Tinfoil enclave verified against an unpinned repository",
 		)
@@ -235,10 +253,10 @@ func (SDKClientFactory) NewVerifiedClient(_ context.Context, model domain.Public
 	opts := []tinfoilsdk.ClientOption{
 		tinfoilsdk.WithTransport(tinfoilsdk.TransportEHBP),
 	}
-	if repo := strings.TrimSpace(os.Getenv("TINFOIL_CONFIG_REPO")); repo != "" {
+	if repo := configuredRepo(); repo != "" {
 		opts = append(opts, tinfoilsdk.WithRepo(repo))
 	}
-	if enclave := strings.TrimSpace(os.Getenv("TINFOIL_ENCLAVE_HOST")); enclave != "" {
+	if enclave := configuredEnclave(); enclave != "" {
 		opts = append(opts, tinfoilsdk.WithEnclave(enclave))
 	}
 	// ProviderConfig.BaseURL is the OpenAI-compatible catalog URL. Do not treat
@@ -248,8 +266,8 @@ func (SDKClientFactory) NewVerifiedClient(_ context.Context, model domain.Public
 	if proxyBaseURL := configuredProxyBaseURL(); proxyBaseURL != "" {
 		opts = append(opts, tinfoilsdk.WithBaseURL(proxyBaseURL))
 	}
-	if bundleURL := strings.TrimSpace(os.Getenv("TINFOIL_ATTESTATION_BUNDLE_URL")); bundleURL != "" {
-		opts = append(opts, tinfoilsdk.WithAttestationBundleURL(strings.TrimRight(bundleURL, "/")))
+	if bundleURL := configuredBundleURL(); bundleURL != "" {
+		opts = append(opts, tinfoilsdk.WithAttestationBundleURL(bundleURL))
 	}
 
 	client, err := tinfoilsdk.NewClientWithOptions(opts...)

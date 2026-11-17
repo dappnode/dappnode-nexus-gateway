@@ -17,18 +17,24 @@ import (
 
 func TestAttestedTransportOnlyForThePinnedRepository(t *testing.T) {
 	for _, tc := range []struct {
-		repo string
-		want bool
+		repo, enclave, bundle string
+		want                  bool
 	}{
-		{"", true},
-		{AttestedConfigRepo, true},
-		{"  " + AttestedConfigRepo + "  ", true},
-		{"nexus/leaky-router", false},
-		{"tinfoilsh/confidential-model-router-dev", false},
+		{"", "inference.tinfoil.sh", "", true},
+		{AttestedConfigRepo, "inference.tinfoil.sh", "", true},
+		{"  " + AttestedConfigRepo + "  ", "inference.tinfoil.sh", "", true},
+		{"nexus/leaky-router", "leaky.example", "", false},
+		{"tinfoilsh/confidential-model-router-dev", "inference.tinfoil.sh", "", false},
+		{"nexus/leaky-router", "", "https://bundle.example", false},
+		// Without an enclave host or bundle URL the SDK ignores the repo and
+		// verifies Tinfoil's default, so the request is safe to serve.
+		{"nexus/leaky-router", "", "", true},
 	} {
 		t.Setenv("TINFOIL_CONFIG_REPO", tc.repo)
+		t.Setenv("TINFOIL_ENCLAVE_HOST", tc.enclave)
+		t.Setenv("TINFOIL_ATTESTATION_BUNDLE_URL", tc.bundle)
 		if got := NewAdapter(time.Second).AttestedTransport(); got != tc.want {
-			t.Errorf("TINFOIL_CONFIG_REPO=%q: AttestedTransport() = %v, want %v", tc.repo, got, tc.want)
+			t.Errorf("repo=%q enclave=%q bundle=%q: AttestedTransport() = %v, want %v", tc.repo, tc.enclave, tc.bundle, got, tc.want)
 		}
 	}
 }
@@ -43,6 +49,7 @@ func providerServer(t *testing.T) (*httptest.Server, *int) {
 		fmt.Fprint(w, `{"id":"cmpl-1","choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
 	}))
 	t.Cleanup(server.Close)
+	t.Setenv("TINFOIL_CONFIG_REPO", "")
 	t.Setenv("TINFOIL_API_KEY", "test-key")
 	t.Setenv("TINFOIL_PROXY_BASE_URL", server.URL)
 	return server, &sent
@@ -95,8 +102,8 @@ func TestOrdinaryRequestsIgnoreTheRepositoryPin(t *testing.T) {
 func assertUnpinnedRepositoryRefused(t *testing.T, err error) {
 	t.Helper()
 	var gwErr *domain.GatewayError
-	if !errors.As(err, &gwErr) || gwErr.Code != domain.ErrCodeAttestedInferenceUnavailable {
-		t.Fatalf("want %s, got %T %[2]v", domain.ErrCodeAttestedInferenceUnavailable, err)
+	if !errors.As(err, &gwErr) || gwErr.Code != domain.ErrCodeProviderUnavailable {
+		t.Fatalf("want %s, got %T %[2]v", domain.ErrCodeProviderUnavailable, err)
 	}
 	if domain.FaultOf(err) != domain.FaultNexus {
 		t.Fatalf("fault = %q, want %q: a misconfigured repository is Nexus's fault", domain.FaultOf(err), domain.FaultNexus)

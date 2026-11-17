@@ -13,6 +13,9 @@ import (
 // Attested inference sends a prompt only to adapters that claim an attested
 // transport, so the claim must be exactly where verification happens.
 func TestOnlyTinfoilClaimsAnAttestedTransport(t *testing.T) {
+	// Tinfoil's claim depends on which repo it verifies; see the tinfoil
+	// package. This test is about which adapters can make it at all.
+	t.Setenv("TINFOIL_CONFIG_REPO", "")
 	adapters := map[string]ports.Provider{
 		"tinfoil":  tinfoil.NewAdapter(time.Second),
 		"openai":   openai.NewAdapter(time.Second),

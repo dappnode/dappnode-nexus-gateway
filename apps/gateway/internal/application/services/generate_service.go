@@ -340,8 +340,10 @@ func (s *GenerateService) storeTinfoilProof(ctx context.Context, auth domain.Aut
 		return
 	}
 	// The client of an attested-inference request verifies this enclave
-	// itself and keeps its own proof; a server copy would only be a lasting
-	// record of who used a private model when.
+	// itself and keeps its own proof, so a server copy adds no evidence. It
+	// would keep each request's full verification record forever, beyond the
+	// usage Metering needs for billing. GET /tinfoil/proofs has nothing for
+	// these responses.
 	if domain.AttestedInferenceRequired(ctx) {
 		return
 	}

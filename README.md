@@ -150,13 +150,15 @@ encrypted envelope, next to `schema_version`, `request_id`, `issued_at` and
 `request`. The enclave then lets only attested code read the prompt: itself
 and a provider whose attestation it verifies before sending anything (today,
 Tinfoil). It refuses routers such as `nexus/auto`, which send the prompt to
-the Router, skips PII masking, which sends it to the analyzer, and never falls
+the Router, skips PII masking whatever the key's PII mode (masking sends the
+prompt to the analyzer, and the provider can't read it anyway), and never falls
 back to a provider without that verification. The code the Tinfoil enclave
 must run is pinned in this binary (`tinfoilsh/confidential-model-router`):
 `TINFOIL_CONFIG_REPO` is operator configuration outside the measurements, so
-a different value refuses these requests rather than trusting it. Nor does it store a Tinfoil
-proof of the request: the client keeps its own. A request it can't serve that
-way returns 422 `attested_inference_unavailable` and nothing is sent upstream.
+a different value refuses these requests rather than trusting it. Nor does it
+store a Tinfoil proof of the request: the client keeps its own. A request it
+can't serve that way returns 422 `attested_inference_unavailable` and nothing
+is sent upstream.
 The field is inside the encrypted body, so nothing between the client and the
 enclave can add or remove it, and a Gateway that predates it rejects the
 envelope rather than ignoring it.
