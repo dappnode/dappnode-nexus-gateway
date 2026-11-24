@@ -1,10 +1,13 @@
 // Command nexus-enclave-init starts and supervises the processes that share
-// one Nitro enclave, from a Compose-like file baked into the measured image:
+// one Nitro enclave. A Nitro enclave has no container runtime, so Docker
+// Compose cannot run in it; this plays that role, from a file baked into the
+// measured image that uses Compose's own key names where the meaning is the
+// same (command, user, working_dir, environment, depends_on, restart):
 //
 //	services:
 //	  presidio:
 //	    command: ["gunicorn", "-b", "127.0.0.1:3000", "app:create_app()"]
-//	    workdir: /app
+//	    working_dir: /app
 //	    user: 1001
 //	    inherit_env: true
 //	    health: {url: "http://127.0.0.1:3000/health", timeout_seconds: 120}
@@ -56,9 +59,9 @@ type spec struct {
 
 type service struct {
 	Command []string          `yaml:"command"`
-	Workdir string            `yaml:"workdir"`
+	Workdir string            `yaml:"working_dir"`
 	User    *uint32           `yaml:"user"` // Numeric uid/gid; unset runs as the init's user.
-	Env     map[string]string `yaml:"env"`
+	Env     map[string]string `yaml:"environment"`
 	// InheritEnv passes the init's whole environment (the image's ENV) to the
 	// service. Off by default, so one service's settings cannot leak into
 	// another (Presidio's image sets PORT=3000, which the gateway also reads).
