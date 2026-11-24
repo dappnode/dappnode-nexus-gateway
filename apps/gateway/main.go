@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/http/middleware"
 	meteringadapter "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/metering"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/observability/metrics"
+	piicache "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/pii/cache"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/pii/presidio"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/openai"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/adapters/providers/registry"
@@ -168,11 +170,20 @@ func main() {
 	go func() {
 		metricsAddr := envOr("METRICS_PORT", "9090")
 		zapLogger.Info("metrics server starting", "port", metricsAddr)
-		metricsBind := ":" + metricsAddr
 		if profile.Enabled {
-			metricsBind = "127.0.0.1:" + metricsAddr
+			// Inside the enclave the parent forwards this vsock port to the
+			// scraper, so the enclave reports the same metrics as any gateway.
+			listener, err := enclavenetwork.ListenMetrics()
+			if err != nil {
+				zapLogger.Error("metrics listener error", "error", err)
+				return
+			}
+			if err := http.Serve(listener, metricsMux); err != nil {
+				zapLogger.Error("metrics server error", "error", err)
+			}
+			return
 		}
-		if err := http.ListenAndServe(metricsBind, metricsMux); err != nil {
+		if err := http.ListenAndServe(":"+metricsAddr, metricsMux); err != nil {
 			zapLogger.Error("metrics server error", "error", err)
 		}
 	}()
@@ -254,13 +265,30 @@ func buildPIIFilter(log *logger.ZapLogger) (ports.PIIFilter, string, bool) {
 		"timeout_ms", timeout.Milliseconds(),
 		"fail_open", failOpen,
 	)
-	return presidio.NewAdapter(presidio.Config{
+	cfg := presidio.Config{
 		BaseURL:         url,
 		DefaultLanguage: language,
 		ScoreThreshold:  threshold,
 		Timeout:         timeout,
 		Logger:          log,
-	}), language, failOpen
+	}
+	if profile.Enabled {
+		// Inside the enclave the analyzer runs as a sibling process. Refuse
+		// any URL that would send prompt text anywhere but loopback.
+		parsed, err := neturl.Parse(url)
+		if err != nil || parsed.Scheme != "http" || enclavenetwork.CheckLoopbackAddress(parsed.Host) != nil {
+			log.Error("PRESIDIO_ANALYZER_URL must be http://127.0.0.1:<port> inside the enclave", "analyzer_url", url)
+			os.Exit(1)
+		}
+		cfg.Transport = enclavenetwork.LoopbackTransport()
+	}
+	entries, err := positiveIntEnv("PII_CACHE_ENTRIES", piicache.DefaultEntries)
+	if err != nil {
+		log.Error("invalid PII cache size", "error", err)
+		os.Exit(1)
+	}
+	log.Info("pii analyzer cache enabled", "entries", entries)
+	return piicache.New(presidio.NewAdapter(cfg), entries), language, failOpen
 }
 
 // positiveIntEnv reads a positive whole number from the environment. A set but

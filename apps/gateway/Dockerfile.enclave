@@ -1,6 +1,16 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-# Pin upstream build inputs by digest. Together with SOURCE_DATE_EPOCH and
+# The Nitro enclave image: the gateway, nexus-enclave-init and the Presidio PII
+# analyzer, so every request a regular gateway can serve is served inside the
+# enclave and prompt text never leaves it for masking.
+#
+# The runtime image is Microsoft's Presidio analyzer pinned by its multi-arch
+# index digest, with the two Go binaries added on top. nexus-enclave-init is
+# the entrypoint: it starts Presidio as uid 1001 and then the gateway as root
+# (the gateway configures the enclave's network), from
+# apps/gateway/enclave/services.yaml.
+#
+# Pin every upstream input by digest. Together with SOURCE_DATE_EPOCH and
 # rewrite-timestamp (see deploy/nitro/build-release-assets.sh) this builds
 # reproducibly: the same revision yields the same PCR0/PCR1/PCR2 on any x86_64
 # machine, so a published release can be independently rebuilt and checked with
@@ -12,6 +22,9 @@ FROM golang:1.26.11-alpine3.24@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa
 ARG SOURCE_REVISION
 ARG AWS_REGION
 ARG KMS_KEY_ARN
+# Empty builds the non-enclave variant, for running the image locally with
+# plain Docker (no vsock, no KMS bootstrap). Releases always use the default.
+ARG GO_TAGS=nitro_enclave
 
 WORKDIR /src
 
@@ -20,7 +33,6 @@ RUN go mod download
 
 COPY . .
 
-# Reject values that could break linker-flag tokenization.
 RUN printf '%s' "$SOURCE_REVISION" | grep -Eq '^[0-9a-f]{40}$'
 RUN printf '%s' "$AWS_REGION" | grep -Eq '^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$'
 RUN printf '%s' "$KMS_KEY_ARN" | grep -Eq '^arn:(aws|aws-us-gov|aws-cn):kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-fA-F-]{36}$'
@@ -28,18 +40,25 @@ RUN printf '%s' "$KMS_KEY_ARN" | grep -Eq '^arn:(aws|aws-us-gov|aws-cn):kms:[a-z
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -buildvcs=false \
     -trimpath \
-    -tags nitro_enclave \
+    -tags "$GO_TAGS" \
     -ldflags="-s -w -buildid= \
       -X github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/profile.SourceRevision=${SOURCE_REVISION} \
       -X github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/profile.AWSRegion=${AWS_REGION} \
       -X github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/profile.KMSKeyARN=${KMS_KEY_ARN}" \
-    -o /out/gateway ./apps/gateway
+    -o /out/gateway ./apps/gateway \
+ && CGO_ENABLED=0 GOOS=linux go build \
+    -buildvcs=false \
+    -trimpath \
+    -tags "$GO_TAGS" \
+    -ldflags="-s -w -buildid=" \
+    -o /out/nexus-enclave-init ./apps/gateway/cmd/nexus-enclave-init
 
-# No shell, package manager, or writable application data is included in the
-# enclave runtime image. The Go binary is fully static.
-FROM scratch
+FROM mcr.microsoft.com/presidio-analyzer:2.2.362@sha256:286e3fa7f3a7426e775e8564fe1870f1ba8f999d3ab8bbb8cc46a44355d9d6e9
 
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+USER root
 COPY --from=builder /out/gateway /gateway
+COPY --from=builder /out/nexus-enclave-init /nexus-enclave-init
+COPY apps/gateway/enclave/services.yaml /etc/nexus/enclave-services.yaml
 
-ENTRYPOINT ["/gateway"]
+ENTRYPOINT ["/nexus-enclave-init", "-config", "/etc/nexus/enclave-services.yaml"]
+CMD []

@@ -27,6 +27,12 @@ func ListenGateway(port uint32) (net.Listener, error) {
 	return vsock.Listen(port, nil)
 }
 
+// ListenMetrics serves metrics on the measured vsock port the parent
+// forwards to Prometheus.
+func ListenMetrics() (net.Listener, error) {
+	return vsock.Listen(profile.MetricsVsockPort, nil)
+}
+
 func ConfigureProviderTransport(transport *http.Transport) {
 	configureProviderTransport(transport)
 }
@@ -75,6 +81,12 @@ func StartTinfoilTLSBridge() (net.Listener, error) {
 	}
 	go serveTinfoilTLSBridge(listener, providerPort)
 	return listener, nil
+}
+
+// ConfigureLoopback brings up 127.0.0.1 on lo. The enclave init calls it
+// before starting in-enclave services; calling it again is harmless.
+func ConfigureLoopback() error {
+	return configureIPv4Loopback()
 }
 
 func configureIPv4Loopback() error {

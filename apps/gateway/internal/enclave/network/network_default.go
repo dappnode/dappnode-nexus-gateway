@@ -21,3 +21,13 @@ func ConfigureRouterTransport(*http.Transport) {}
 func ConfigureDefaultTransport() error { return nil }
 
 func StartTinfoilTLSBridge() (net.Listener, error) { return nil, nil }
+
+// ConfigureLoopback is a no-op outside the enclave, where the OS already
+// brings up loopback.
+func ConfigureLoopback() error { return nil }
+
+// ListenMetrics is only used inside the enclave; elsewhere metrics listen on
+// METRICS_PORT.
+func ListenMetrics() (net.Listener, error) {
+	return nil, fmt.Errorf("metrics over vsock only exist inside the enclave")
+}

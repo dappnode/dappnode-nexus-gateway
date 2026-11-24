@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const frankfurterURL = "https://api.frankfurter.app/latest"
+// frankfurterURL is the current endpoint. api.frankfurter.app now answers with
+// a redirect here; calling it directly saves the round trip and lets the
+// enclave allow a single measured host.
+const frankfurterURL = "https://api.frankfurter.dev/v1/latest"
 
 // CacheTTL bounds how stale a cached rate may be. ECB publishes once per
 // business day, so an hour is comfortably fresh while sparing the API.

@@ -142,16 +142,29 @@ The Nitro confidential endpoint authenticates before storing replay IDs. Each
 account may retain at most 10,000 IDs during the three-minute replay window,
 shared across its API keys; excess requests return 429 with
 `confidential_request_limit_exceeded`. The process-wide limit remains 100,000.
-Live entries are never evicted to admit new requests. Metrics bind to loopback
-in Nitro builds and retain their internal-network listener in ordinary builds.
+Live entries are never evicted to admit new requests. Nitro builds serve
+metrics on vsock port 9090, which the parent forwards to Prometheus; ordinary
+builds listen on `METRICS_PORT`. Metrics carry model, provider and error
+labels, never request content.
+
+The Nitro enclave runs three processes from one measured image:
+`nexus-enclave-init` (the entrypoint), the Presidio PII analyzer and the
+Gateway. The init reads `apps/gateway/enclave/services.yaml`, starts Presidio as
+an unprivileged user, starts the Gateway once Presidio is healthy, restarts
+either if it exits, and stops both on shutdown. The Gateway reaches Presidio on
+loopback only: a Nitro build refuses to start if `PRESIDIO_ANALYZER_URL` is not
+`http://127.0.0.1:<port>`, so prompt text is never sent out of the enclave for
+masking. Analyzer results are cached across requests (`PII_CACHE_ENTRIES`,
+default 20,000), keyed by a SHA-256 of the mode, language and text; the cache
+holds hashes and entity offsets, never the text.
 
 A confidential request may set `"require_attested_inference": true` in its
 encrypted envelope, next to `schema_version`, `request_id`, `issued_at` and
 `request`. The enclave then lets only attested code read the prompt: itself
 and a provider whose attestation it verifies before sending anything (today,
 Tinfoil). It refuses routers such as `nexus/auto`, which send the prompt to
-the Router, skips PII masking whatever the key's PII mode (masking sends the
-prompt to the analyzer, and the provider can't read it anyway), and never falls
+the Router, skips PII masking whatever the key's PII mode (the attested
+provider can't read the prompt anyway), and never falls
 back to a provider without that verification. The code the Tinfoil enclave
 must run is pinned in this binary (`tinfoilsh/confidential-model-router`):
 `TINFOIL_CONFIG_REPO` is operator configuration outside the measurements, so

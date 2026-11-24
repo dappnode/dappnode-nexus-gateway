@@ -1,0 +1,24 @@
+# Processes that share the gateway enclave. Read by nexus-enclave-init and
+# baked into the measured image, so changing it changes PCR0.
+services:
+  presidio:
+    # One worker holds about 0.75 GiB (spaCy en_core_web_lg). Each extra
+    # worker adds the same again and raises throughput roughly linearly.
+    command: ["gunicorn", "-w", "1", "-b", "127.0.0.1:3000", "app:create_app()"]
+    workdir: /app
+    user: 1001
+    # Presidio reads its configuration from the image's ENV.
+    inherit_env: true
+    health:
+      url: http://127.0.0.1:3000/health
+      timeout_seconds: 180
+
+  gateway:
+    command: ["/gateway"]
+    depends_on: [presidio]
+    # The gateway gets only what is listed here; its secrets and the rest of
+    # its configuration arrive through the KMS bootstrap, as today.
+    env:
+      PORT: "8080"
+      PII_FILTER_ENABLED: "true"
+      PRESIDIO_ANALYZER_URL: http://127.0.0.1:3000

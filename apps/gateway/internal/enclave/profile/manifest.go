@@ -9,12 +9,17 @@ const (
 	// Port 7000 is used by the Nitro image loader while the enclave boots.
 	// Keep application traffic on a distinct port to avoid relying on reuse of
 	// that implementation-owned listener.
-	BootstrapPort      = 7001
-	GatewayPort        = 8080
-	ParentCID          = 3
-	KMSVsockPort       = 8000
-	MeteringVsockPort  = 8444
-	RouterVsockPort    = 8445
+	BootstrapPort     = 7001
+	GatewayPort       = 8080
+	ParentCID         = 3
+	KMSVsockPort      = 8000
+	MeteringVsockPort = 8444
+	RouterVsockPort   = 8445
+	// MetricsVsockPort serves Prometheus metrics to the parent, which
+	// forwards them to the scraper. Metrics carry model, provider and error
+	// labels, never request content. The parent connects in, so this adds no
+	// way out of the enclave.
+	MetricsVsockPort   = 9090
 	SecretBundleSchema = 1
 	ManifestSchema     = 4
 )
@@ -42,6 +47,8 @@ func ProviderEgressRoutes() []ProviderEgressRoute {
 		{Name: "sigstore-tuf", Host: "tuf-repo-cdn.sigstore.dev", Port: 443, VsockPort: 8449},
 		{Name: "tinfoil-kds", Host: "kds-proxy.tinfoil.sh", Port: 443, VsockPort: 8450},
 		{Name: "tinfoil-tdx", Host: "tdx-proxy.tinfoil.sh", Port: 443, VsockPort: 8451},
+		{Name: "dappnode", Host: "llm.dappnode.net", Port: 443, VsockPort: 8454},
+		{Name: "frankfurter", Host: "api.frankfurter.dev", Port: 443, VsockPort: 8455},
 	}
 }
 
