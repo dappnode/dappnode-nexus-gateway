@@ -41,6 +41,7 @@ var allowedEnvironmentKeys = map[string]struct{}{
 	"PII_FILTER_TIMEOUT_MS":          {},
 	"PII_FILTER_FAIL_OPEN":           {},
 	"PII_CACHE_ENTRIES":              {},
+	"GUEST_MAX_OUTPUT_TOKENS":        {},
 	"TINFOIL_PROXY_BASE_URL":         {},
 	"TINFOIL_CONFIG_REPO":            {},
 	"TINFOIL_ENCLAVE_HOST":           {},
