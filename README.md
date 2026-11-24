@@ -155,8 +155,9 @@ either if it exits, and stops both on shutdown. The Gateway reaches Presidio on
 loopback only: a Nitro build refuses to start if `PRESIDIO_ANALYZER_URL` is not
 `http://127.0.0.1:<port>`, so prompt text is never sent out of the enclave for
 masking. Analyzer results are cached across requests (`PII_CACHE_ENTRIES`,
-default 20,000), keyed by a SHA-256 of the mode, language and text; the cache
-holds hashes and entity offsets, never the text.
+default 20,000), keyed by an HMAC-SHA256 of the mode, language and text under
+a random per-process key; the cache holds those digests and entity offsets,
+never the text.
 
 A confidential request may set `"require_attested_inference": true` in its
 encrypted envelope, next to `schema_version`, `request_id`, `issued_at` and

@@ -2,14 +2,17 @@
 //
 // Chat clients resend the whole conversation on every turn, and the analyzer
 // is called once per distinct text field. Without a shared cache, turn N of a
-// conversation re-analyzes all N-1 earlier messages. The cache keys on a
-// SHA-256 of the options and text, so it holds hashes and entity offsets, never
-// the text itself.
+// conversation re-analyzes all N-1 earlier messages. The cache keys on an
+// HMAC-SHA256 of the options and text under a random key drawn at start and
+// kept only in memory, so it holds keyed digests and entity offsets, never the text,
+// and its keys cannot be matched against guessed texts outside the process.
 package cache
 
 import (
 	"container/list"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"sync"
 	"sync/atomic"
@@ -24,8 +27,9 @@ const DefaultEntries = 20000
 
 // Filter wraps a PII filter with a bounded least-recently-used cache.
 type Filter struct {
-	next ports.PIIFilter
-	max  int
+	next   ports.PIIFilter
+	max    int
+	secret []byte // HMAC key for cache keys; random per process.
 
 	mu    sync.Mutex
 	order *list.List // Front is the most recently used.
@@ -45,11 +49,16 @@ func New(next ports.PIIFilter, maxEntries int) *Filter {
 	if maxEntries <= 0 {
 		maxEntries = DefaultEntries
 	}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		panic("pii cache: no randomness for the cache key: " + err.Error())
+	}
 	return &Filter{
-		next:  next,
-		max:   maxEntries,
-		order: list.New(),
-		items: make(map[[sha256.Size]byte]*list.Element),
+		next:   next,
+		max:    maxEntries,
+		secret: secret,
+		order:  list.New(),
+		items:  make(map[[sha256.Size]byte]*list.Element),
 	}
 }
 
@@ -62,7 +71,7 @@ func (f *Filter) Analyze(ctx context.Context, text string, opts ports.PIIAnalyze
 	if text == "" {
 		return nil, nil
 	}
-	key := cacheKey(text, opts)
+	key := f.cacheKey(text, opts)
 	if entities, ok := f.get(key); ok {
 		f.hits.Add(1)
 		return entities, nil
@@ -110,8 +119,8 @@ func (f *Filter) put(key [sha256.Size]byte, entities []domain.PIIEntity) {
 
 // cacheKey separates fields with a zero byte, which cannot appear in a mode
 // or language code, so different option sets never share a key.
-func cacheKey(text string, opts ports.PIIAnalyzeOptions) [sha256.Size]byte {
-	h := sha256.New()
+func (f *Filter) cacheKey(text string, opts ports.PIIAnalyzeOptions) [sha256.Size]byte {
+	h := hmac.New(sha256.New, f.secret)
 	h.Write([]byte(opts.Mode))
 	h.Write([]byte{0})
 	h.Write([]byte(opts.Language))
