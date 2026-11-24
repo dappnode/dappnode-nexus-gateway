@@ -83,6 +83,12 @@ func StartTinfoilTLSBridge() (net.Listener, error) {
 	return listener, nil
 }
 
+// ConfigureLoopback brings up 127.0.0.1 on lo. The enclave init calls it
+// before starting in-enclave services; calling it again is harmless.
+func ConfigureLoopback() error {
+	return configureIPv4Loopback()
+}
+
 func configureIPv4Loopback() error {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {

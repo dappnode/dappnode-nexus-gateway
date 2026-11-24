@@ -27,3 +27,7 @@ func StartTinfoilTLSBridge() (net.Listener, error) { return nil, nil }
 func ListenMetrics() (net.Listener, error) {
 	return nil, fmt.Errorf("metrics over vsock only exist inside the enclave")
 }
+
+// ConfigureLoopback is a no-op outside the enclave, where the OS already
+// brings up loopback.
+func ConfigureLoopback() error { return nil }

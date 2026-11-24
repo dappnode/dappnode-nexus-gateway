@@ -147,13 +147,23 @@ metrics on vsock port 9090, which the parent forwards to Prometheus; ordinary
 builds listen on `METRICS_PORT`. Metrics carry model, provider and error labels,
 never request content.
 
+The Nitro enclave runs three processes from one measured image:
+`nexus-enclave-init` (the entrypoint), the Presidio PII analyzer and the
+Gateway. The init reads `apps/gateway/enclave/services.yaml`, starts Presidio as
+an unprivileged user, starts the Gateway once Presidio is healthy, restarts
+either if it exits, and stops both on shutdown. The Gateway reaches Presidio on
+loopback only: a Nitro build refuses to start if `PRESIDIO_ANALYZER_URL` is not
+`http://127.0.0.1:<port>`, so prompt text is never sent out of the enclave for
+masking. A key's PII mode therefore applies to confidential requests the same
+way it does on an ordinary Gateway.
+
 A confidential request may set `"require_attested_inference": true` in its
 encrypted envelope, next to `schema_version`, `request_id`, `issued_at` and
 `request`. The enclave then lets only attested code read the prompt: itself
 and a provider whose attestation it verifies before sending anything (today,
 Tinfoil). It refuses routers such as `nexus/auto`, which send the prompt to
-the Router, skips PII masking whatever the key's PII mode (masking sends the
-prompt to the analyzer, and the provider can't read it anyway), and never falls
+the Router, skips PII masking whatever the key's PII mode (the attested
+provider can't read the prompt anyway), and never falls
 back to a provider without that verification. The code the Tinfoil enclave
 must run is pinned in this binary (`tinfoilsh/confidential-model-router`):
 `TINFOIL_CONFIG_REPO` is operator configuration outside the measurements, so
