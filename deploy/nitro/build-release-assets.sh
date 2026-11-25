@@ -107,6 +107,7 @@ build_enclave_image() {
     --label "org.opencontainers.image.source=https://github.com/${SOURCE_REPOSITORY}" \
     --label "org.opencontainers.image.revision=${SOURCE_REVISION}" \
     --label "org.opencontainers.image.version=${VERSION}" \
+    --build-arg "VERSION=${VERSION}" \
     --build-arg "SOURCE_REVISION=${SOURCE_REVISION}" \
     --build-arg "AWS_REGION=${AWS_REGION}" \
     --build-arg "KMS_KEY_ARN=${KMS_KEY_ARN}" \
