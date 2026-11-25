@@ -168,11 +168,20 @@ func main() {
 	go func() {
 		metricsAddr := envOr("METRICS_PORT", "9090")
 		zapLogger.Info("metrics server starting", "port", metricsAddr)
-		metricsBind := ":" + metricsAddr
 		if profile.Enabled {
-			metricsBind = "127.0.0.1:" + metricsAddr
+			// Inside the enclave the parent forwards this vsock port to
+			// Prometheus, so the enclave reports the same metrics as any gateway.
+			listener, err := enclavenetwork.ListenMetrics()
+			if err != nil {
+				zapLogger.Error("metrics listener error", "error", err)
+				return
+			}
+			if err := http.Serve(listener, metricsMux); err != nil {
+				zapLogger.Error("metrics server error", "error", err)
+			}
+			return
 		}
-		if err := http.ListenAndServe(metricsBind, metricsMux); err != nil {
+		if err := http.ListenAndServe(":"+metricsAddr, metricsMux); err != nil {
 			zapLogger.Error("metrics server error", "error", err)
 		}
 	}()
