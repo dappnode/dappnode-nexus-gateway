@@ -142,8 +142,10 @@ The Nitro confidential endpoint authenticates before storing replay IDs. Each
 account may retain at most 10,000 IDs during the three-minute replay window,
 shared across its API keys; excess requests return 429 with
 `confidential_request_limit_exceeded`. The process-wide limit remains 100,000.
-Live entries are never evicted to admit new requests. Metrics bind to loopback
-in Nitro builds and retain their internal-network listener in ordinary builds.
+Live entries are never evicted to admit new requests. Nitro builds serve
+metrics on vsock port 9090, which the parent forwards to Prometheus; ordinary
+builds listen on `METRICS_PORT`. Metrics carry model, provider and error labels,
+never request content.
 
 A confidential request may set `"require_attested_inference": true` in its
 encrypted envelope, next to `schema_version`, `request_id`, `issued_at` and

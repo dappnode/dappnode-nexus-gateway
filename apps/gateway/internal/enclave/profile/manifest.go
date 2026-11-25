@@ -9,12 +9,17 @@ const (
 	// Port 7000 is used by the Nitro image loader while the enclave boots.
 	// Keep application traffic on a distinct port to avoid relying on reuse of
 	// that implementation-owned listener.
-	BootstrapPort      = 7001
-	GatewayPort        = 8080
-	ParentCID          = 3
-	KMSVsockPort       = 8000
-	MeteringVsockPort  = 8444
-	RouterVsockPort    = 8445
+	BootstrapPort     = 7001
+	GatewayPort       = 8080
+	ParentCID         = 3
+	KMSVsockPort      = 8000
+	MeteringVsockPort = 8444
+	RouterVsockPort   = 8445
+	// MetricsVsockPort serves Prometheus metrics to the parent, which forwards
+	// them to the scraper. The parent connects in, so this adds no way out of
+	// the enclave. Metrics carry model, provider and error labels, never
+	// request content.
+	MetricsVsockPort   = 9090
 	SecretBundleSchema = 1
 	ManifestSchema     = 4
 )

@@ -27,6 +27,12 @@ func ListenGateway(port uint32) (net.Listener, error) {
 	return vsock.Listen(port, nil)
 }
 
+// ListenMetrics serves metrics on the vsock port the parent forwards to
+// Prometheus.
+func ListenMetrics() (net.Listener, error) {
+	return vsock.Listen(profile.MetricsVsockPort, nil)
+}
+
 func ConfigureProviderTransport(transport *http.Transport) {
 	configureProviderTransport(transport)
 }
