@@ -60,11 +60,12 @@ mapfile -t manifest_fields < <(
   jq -r '
     .schema_version, .source.revision, .build.aws_region, .build.kms_key_arn,
     .build.source_date_epoch, .build.nitro_cli_version, .build.architecture,
-    .enclave.measurements.pcr0, .enclave.measurements.pcr1, .enclave.measurements.pcr2
+    .enclave.measurements.pcr0, .enclave.measurements.pcr1, .enclave.measurements.pcr2,
+    .release.version
   ' "$manifest_path"
 )
 
-if [[ "${#manifest_fields[@]}" -ne 10 ]]; then
+if [[ "${#manifest_fields[@]}" -ne 11 ]]; then
   printf 'not a Gateway release manifest: %s\n' "$manifest_path" >&2
   exit 1
 fi
@@ -79,6 +80,7 @@ architecture="${manifest_fields[6]}"
 expected_pcr0="${manifest_fields[7]}"
 expected_pcr1="${manifest_fields[8]}"
 expected_pcr2="${manifest_fields[9]}"
+version="${manifest_fields[10]}"
 
 if [[ ! "$schema" =~ ^[0-9]+$ ]]; then
   printf 'manifest has no usable schema_version: %s\n' "$manifest_path" >&2
@@ -93,7 +95,8 @@ fi
 
 for pair in "revision:$revision" "aws_region:$region" "kms_key_arn:$kms_key_arn" \
             "source_date_epoch:$source_date_epoch" "architecture:$architecture" \
-            "pcr0:$expected_pcr0" "pcr1:$expected_pcr1" "pcr2:$expected_pcr2"; do
+            "pcr0:$expected_pcr0" "pcr1:$expected_pcr1" "pcr2:$expected_pcr2" \
+            "release.version:$version"; do
   [[ -n "${pair#*:}" && "${pair#*:}" != "null" ]] || {
     printf 'manifest is missing %s\n' "${pair%%:*}" >&2; exit 1; }
 done
@@ -144,7 +147,11 @@ docker buildx build --pull -q --load \
   -t "$nitro_cli_image" \
   "$context/deploy/nitro" >>"$build_log" 2>&1 || fail
 
+# VERSION is compiled into the binary, so it is part of the measurements. Older
+# revisions' Dockerfiles do not declare it; BuildKit only warns about an unused
+# build argument, so passing it unconditionally leaves their rebuild unchanged.
 SOURCE_DATE_EPOCH="$source_date_epoch" docker buildx build --pull --no-cache --provenance=false \
+  --build-arg "VERSION=${version}" \
   --build-arg "SOURCE_REVISION=${revision}" \
   --build-arg "AWS_REGION=${region}" \
   --build-arg "KMS_KEY_ARN=${kms_key_arn}" \
@@ -154,7 +161,8 @@ SOURCE_DATE_EPOCH="$source_date_epoch" docker buildx build --pull --no-cache --p
 
 # The image labels carry the version and repository. They live in the image
 # config rather than the filesystem, so they do not reach the measurements and
-# are deliberately not reproduced here.
+# are deliberately not reproduced here. (The version also reaches the binary, as
+# the VERSION build argument above.)
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "${artifacts}:/artifacts" \
@@ -162,7 +170,7 @@ docker run --rm \
   --docker-uri "$enclave_image" \
   --output-file /artifacts/verify.eif \
   --name nexus-gateway \
-  --version "$(jq -r '.release.version' "$manifest_path")" >>"$build_log" 2>&1 || fail
+  --version "$version" >>"$build_log" 2>&1 || fail
 
 describe="$(docker run --rm -v "${artifacts}:/artifacts" "$nitro_cli_image" \
   describe-eif --eif-path /artifacts/verify.eif 2>>"$build_log")" || fail
