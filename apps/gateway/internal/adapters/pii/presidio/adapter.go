@@ -31,6 +31,10 @@ type Config struct {
 	Timeout time.Duration
 	// Logger receives debug / warn events. Required.
 	Logger ports.Logger
+	// Transport carries analyzer calls. Nil uses http.DefaultTransport, which
+	// the enclave replaces with its provider-only egress, so the enclave passes
+	// a loopback transport here.
+	Transport http.RoundTripper
 }
 
 // Adapter implements ports.PIIFilter against Presidio's `/analyze` endpoint.
@@ -53,7 +57,7 @@ func NewAdapter(cfg Config) *Adapter {
 	}
 	return &Adapter{
 		cfg:    cfg,
-		client: &http.Client{Timeout: cfg.Timeout},
+		client: &http.Client{Timeout: cfg.Timeout, Transport: cfg.Transport},
 	}
 }
 

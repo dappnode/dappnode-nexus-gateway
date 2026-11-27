@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -263,13 +264,24 @@ func buildPIIFilter(log *logger.ZapLogger) (ports.PIIFilter, string, bool) {
 		"timeout_ms", timeout.Milliseconds(),
 		"fail_open", failOpen,
 	)
-	return presidio.NewAdapter(presidio.Config{
+	cfg := presidio.Config{
 		BaseURL:         url,
 		DefaultLanguage: language,
 		ScoreThreshold:  threshold,
 		Timeout:         timeout,
 		Logger:          log,
-	}), language, failOpen
+	}
+	if profile.Enabled {
+		// Inside the enclave the analyzer runs as a sibling process. Refuse
+		// any URL that would send prompt text anywhere but loopback.
+		parsed, err := neturl.Parse(url)
+		if err != nil || parsed.Scheme != "http" || enclavenetwork.CheckLoopbackAddress(parsed.Host) != nil {
+			log.Error("PRESIDIO_ANALYZER_URL must be http://127.0.0.1:<port> inside the enclave", "analyzer_url", url)
+			os.Exit(1)
+		}
+		cfg.Transport = enclavenetwork.LoopbackTransport()
+	}
+	return presidio.NewAdapter(cfg), language, failOpen
 }
 
 // positiveIntEnv reads a positive whole number from the environment. A set but
