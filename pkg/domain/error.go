@@ -35,6 +35,7 @@ const (
 	ErrCodeUnknownField            = "unknown_field"
 	ErrCodeInsufficientBalance     = "insufficient_balance"
 	ErrCodeDailyTokenLimit         = "daily_token_limit_exceeded"
+	ErrCodeFreeModelAllowance      = "free_model_allowance_exceeded"
 	ErrCodeGuestModelNotAllowed    = "guest_model_not_allowed"
 	ErrCodeContentPolicy           = "content_policy_violation"
 	ErrCodeTooManyConcurrent       = "too_many_concurrent_requests"

@@ -303,7 +303,7 @@ func userFacingMeteringError(method, path string, status int, envelope errorResp
 		if envelope.Error.Code == domain.ErrCodeInsufficientBalance {
 			wantStatus = http.StatusPaymentRequired
 			wantType = domain.ErrTypePermission
-		} else if envelope.Error.Code == domain.ErrCodeDailyTokenLimit {
+		} else if envelope.Error.Code == domain.ErrCodeDailyTokenLimit || envelope.Error.Code == domain.ErrCodeFreeModelAllowance {
 			wantStatus = http.StatusTooManyRequests
 			wantType = domain.ErrTypeRateLimit
 		}
