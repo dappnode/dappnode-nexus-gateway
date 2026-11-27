@@ -82,6 +82,38 @@ func TestValidateSecretBundleRejectsUntrustedConfiguration(t *testing.T) {
 			},
 		},
 		{
+			name: "router outside the enclave",
+			environment: map[string]string{
+				"METERING_URL":   "https://metering.example.com",
+				"METERING_TOKEN": "secret",
+				"ROUTER_URL":     "https://router.example.com",
+			},
+		},
+		{
+			name: "router on loopback over a path",
+			environment: map[string]string{
+				"METERING_URL":   "https://metering.example.com",
+				"METERING_TOKEN": "secret",
+				"ROUTER_URL":     "http://127.0.0.1:8083/elsewhere",
+			},
+		},
+		{
+			name: "router database outside the relay",
+			environment: map[string]string{
+				"METERING_URL":        "https://metering.example.com",
+				"METERING_TOKEN":      "secret",
+				"ROUTER_DATABASE_URL": "postgres://nexus@10.200.200.31:5432/nexus",
+			},
+		},
+		{
+			name: "router database without a database name",
+			environment: map[string]string{
+				"METERING_URL":        "https://metering.example.com",
+				"METERING_TOKEN":      "secret",
+				"ROUTER_DATABASE_URL": "postgres://nexus@127.0.0.1:5432",
+			},
+		},
+		{
 			name: "arbitrary process setting",
 			environment: map[string]string{
 				"METERING_URL":   "https://metering.example.com",
@@ -102,5 +134,24 @@ func TestValidateSecretBundleRejectsUntrustedConfiguration(t *testing.T) {
 				t.Fatal("untrusted configuration was accepted")
 			}
 		})
+	}
+}
+
+func TestValidateSecretBundleAcceptsInEnclaveRouter(t *testing.T) {
+	now := time.Now().UTC()
+	bundle := SecretBundle{
+		SchemaVersion:  SchemaVersion,
+		SourceRevision: testRevision,
+		IssuedAt:       now.Add(-time.Minute),
+		Environment: map[string]string{
+			"METERING_URL":        "https://metering.example.com",
+			"METERING_TOKEN":      "secret",
+			"ROUTER_URL":          "http://127.0.0.1:8083",
+			"ROUTER_DATABASE_URL": "postgres://nexus@127.0.0.1:5432/nexus?sslmode=disable",
+			"TYPESAFE_API_KEY":    "ts-key",
+		},
+	}
+	if err := ValidateSecretBundle(bundle, testRevision, now); err != nil {
+		t.Fatalf("in-enclave Router configuration rejected: %v", err)
 	}
 }

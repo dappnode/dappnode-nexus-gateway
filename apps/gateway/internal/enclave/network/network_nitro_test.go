@@ -120,3 +120,14 @@ func TestConfigureDefaultTransportInstallsFailClosedDialer(t *testing.T) {
 		t.Fatal("provider vsock dialer was not installed")
 	}
 }
+
+func TestRouterTransportOnlyDialsLoopback(t *testing.T) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	ConfigureRouterTransport(transport)
+	for _, address := range []string{"10.200.200.31:8083", "router.example.com:443", "[::1]:8083"} {
+		if _, err := transport.DialContext(context.Background(), "tcp", address); err == nil ||
+			!strings.Contains(err.Error(), "loopback") {
+			t.Fatalf("dial %s: %v, want a loopback refusal", address, err)
+		}
+	}
+}

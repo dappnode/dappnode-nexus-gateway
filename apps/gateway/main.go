@@ -31,6 +31,7 @@ import (
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/bootstrap"
 	enclavenetwork "github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/network"
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/profile"
+	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/routerservice"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/fx"
 	"github.com/dappnode/dappnode-nexus-gateway/pkg/observability/logger"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
@@ -52,11 +53,36 @@ func main() {
 			log.Fatalf("failed to configure Tinfoil enclave verification: %v", err)
 		}
 		defer tinfoilTLSBridge.Close()
+
+		// The Router runs next to the Gateway and leaves the enclave only
+		// through these relays. Start them before handing the Router its
+		// settings: the init starts the Router as soon as the file exists.
+		routerRelays, err := enclavenetwork.StartRouterRelays()
+		if err != nil {
+			log.Fatalf("failed to start the Router's relays: %v", err)
+		}
+		for _, relay := range routerRelays {
+			defer relay.Close()
+		}
+		routerEnv, err := routerservice.Environment(os.Getenv)
+		if err != nil {
+			log.Fatalf("invalid Router configuration: %v", err)
+		}
+		if err := routerservice.WriteEnvFile(routerservice.EnvFile, routerEnv); err != nil {
+			log.Fatalf("failed to hand the Router its configuration: %v", err)
+		}
 	}
 
 	port := envOr("PORT", "8080")
 	logLevel := envOr("LOG_LEVEL", "info")
 	routerURL := envOr("ROUTER_URL", "http://localhost:8083")
+	if profile.Enabled {
+		// The Router reads the prompt; inside the enclave it must be the
+		// sibling process on loopback.
+		if err := requireLoopbackHTTP(routerURL); err != nil {
+			log.Fatalf("ROUTER_URL must be http://127.0.0.1:<port> inside the enclave: %v", err)
+		}
+	}
 	meteringURL := envOr("METERING_URL", "http://localhost:8084")
 	meteringToken := envOr("METERING_TOKEN", "dev-metering-token")
 	transportTimeouts, err := loadTransportTimeouts()
@@ -274,14 +300,26 @@ func buildPIIFilter(log *logger.ZapLogger) (ports.PIIFilter, string, bool) {
 	if profile.Enabled {
 		// Inside the enclave the analyzer runs as a sibling process. Refuse
 		// any URL that would send prompt text anywhere but loopback.
-		parsed, err := neturl.Parse(url)
-		if err != nil || parsed.Scheme != "http" || enclavenetwork.CheckLoopbackAddress(parsed.Host) != nil {
-			log.Error("PRESIDIO_ANALYZER_URL must be http://127.0.0.1:<port> inside the enclave", "analyzer_url", url)
+		if err := requireLoopbackHTTP(url); err != nil {
+			log.Error("PRESIDIO_ANALYZER_URL must be http://127.0.0.1:<port> inside the enclave", "analyzer_url", url, "error", err.Error())
 			os.Exit(1)
 		}
 		cfg.Transport = enclavenetwork.LoopbackTransport()
 	}
 	return presidio.NewAdapter(cfg), language, failOpen
+}
+
+// requireLoopbackHTTP accepts only http://127.0.0.1:<port> URLs: the services
+// that read prompt text inside the enclave are reached on loopback alone.
+func requireLoopbackHTTP(raw string) error {
+	parsed, err := neturl.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "http" {
+		return fmt.Errorf("scheme %q is not http", parsed.Scheme)
+	}
+	return enclavenetwork.CheckLoopbackAddress(parsed.Host)
 }
 
 // positiveIntEnv reads a positive whole number from the environment. A set but

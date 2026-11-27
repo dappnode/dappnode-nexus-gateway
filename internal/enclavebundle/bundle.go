@@ -32,6 +32,7 @@ var allowedEnvironmentKeys = map[string]struct{}{
 	"METERING_URL":                   {},
 	"METERING_TOKEN":                 {},
 	"ROUTER_URL":                     {},
+	"ROUTER_DATABASE_URL":            {},
 	"LOG_LEVEL":                      {},
 	"EUR_TO_USD_FALLBACK_RATE":       {},
 	"PII_FILTER_ENABLED":             {},
@@ -265,10 +266,39 @@ func ValidateSecretBundle(bundle SecretBundle, expectedRevision string, now time
 	if strings.TrimSpace(bundle.Environment["METERING_TOKEN"]) == "" {
 		return errors.New("METERING_TOKEN is required")
 	}
+	// The Router runs inside the enclave (services.yaml), so a Router URL may
+	// only point at loopback: anything else would carry prompts out.
 	if routerURL := strings.TrimSpace(bundle.Environment["ROUTER_URL"]); routerURL != "" {
-		if err := validateHTTPSURL("ROUTER_URL", routerURL); err != nil {
+		if err := validateLoopbackHTTPURL("ROUTER_URL", routerURL); err != nil {
 			return err
 		}
+	}
+	if databaseURL := strings.TrimSpace(bundle.Environment["ROUTER_DATABASE_URL"]); databaseURL != "" {
+		if err := validateRouterDatabaseURL(databaseURL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// routerDatabaseRelay is where the enclave's Gateway relays the Router's
+// Postgres connections to the parent (enclave/network.RouterDatabaseAddress).
+const routerDatabaseRelay = "127.0.0.1:5432"
+
+func validateLoopbackHTTPURL(name, value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" ||
+		parsed.User != nil || parsed.Fragment != "" || strings.Trim(parsed.Path, "/") != "" {
+		return fmt.Errorf("%s must be http://127.0.0.1:<port>: the service runs inside the enclave", name)
+	}
+	return nil
+}
+
+func validateRouterDatabaseURL(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") ||
+		parsed.Host != routerDatabaseRelay || strings.Trim(parsed.Path, "/") == "" {
+		return fmt.Errorf("ROUTER_DATABASE_URL must be postgres://<user>:<password>@%s/<database>, the enclave's database relay", routerDatabaseRelay)
 	}
 	return nil
 }

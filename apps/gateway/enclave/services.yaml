@@ -1,7 +1,8 @@
 # Processes that share the gateway enclave, in Docker Compose's vocabulary.
 # A Nitro enclave cannot run Docker, so nexus-enclave-init reads this file and
 # does Compose's job. The file is baked into the measured image, so changing it
-# changes PCR0. Keys that are not Compose's: health, inherit_env.
+# changes PCR0. Keys that are not Compose's: health, inherit_env. env_file is
+# Compose's, except that the init waits for a file that does not exist yet.
 services:
   presidio:
     # One worker holds about 0.75 GiB (spaCy en_core_web_lg). Each extra
@@ -24,3 +25,33 @@ services:
       PORT: "8080"
       PII_FILTER_ENABLED: "true"
       PRESIDIO_ANALYZER_URL: http://127.0.0.1:3000
+      ROUTER_URL: http://127.0.0.1:8083
+
+  router:
+    # dappnode-nexus-router at the commit pinned in Dockerfile.enclave: the
+    # same code as the regular Router. It reads routing configuration from
+    # Postgres and, for Jev routers, asks TypeSafe to classify the request.
+    # It has no network of its own; both go through relays the gateway runs on
+    # loopback (apps/gateway/internal/enclave/network/relay.go). The admin API
+    # stays off (no ROUTER_ADMIN_TOKEN), so nothing in the enclave writes
+    # routing configuration.
+    command: ["/opt/nexus-router/router"]
+    working_dir: /opt/nexus-router
+    user: 1002
+    depends_on: [gateway]
+    # DATABASE_URL and TYPESAFE_API_KEY. The gateway writes this file from the
+    # KMS-sealed bundle once the enclave has received it.
+    env_file: /run/nexus/router.env
+    environment:
+      PORT: "8083"
+      LOG_LEVEL: info
+      ONNXRUNTIME_SHARED_LIBRARY_PATH: /opt/nexus-router/lib/libonnxruntime.so
+      ROUTER_EMBEDDING_MODEL_PATH: /opt/nexus-router/models/model.onnx
+      ROUTER_EMBEDDING_TOKENIZER_PATH: /opt/nexus-router/models/tokenizer.json
+      ROUTER_EMBEDDING_MAX_TOKENS: "128"
+      # The Router's only way out for HTTPS: a CONNECT proxy that opens
+      # tunnels to TypeSafe and nothing else.
+      HTTPS_PROXY: http://127.0.0.1:3128
+    health:
+      url: http://127.0.0.1:8083/healthz
+      timeout_seconds: 180

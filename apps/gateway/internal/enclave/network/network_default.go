@@ -18,6 +18,12 @@ func ConfigureMeteringTransport(*http.Transport) {}
 
 func ConfigureRouterTransport(*http.Transport) {}
 
+// StartRouterRelays only exists inside the enclave, where the Router has no
+// network of its own.
+func StartRouterRelays() ([]net.Listener, error) {
+	return nil, fmt.Errorf("router relays only exist inside the enclave")
+}
+
 func ConfigureDefaultTransport() error { return nil }
 
 func StartTinfoilTLSBridge() (net.Listener, error) { return nil, nil }
