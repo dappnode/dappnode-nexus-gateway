@@ -143,7 +143,7 @@ func TestWaitEnvFilesWaitsForTheFile(t *testing.T) {
 	svc := &service{name: "router", EnvFiles: envFiles{path}}
 	go func() {
 		time.Sleep(400 * time.Millisecond)
-		_ = os.WriteFile(path, []byte("# written by the gateway\nDATABASE_URL=postgres://u:p=w@127.0.0.1:5432/db\n\nTYPESAFE_API_KEY=k\n"), 0o600)
+		_ = os.WriteFile(path, []byte("# written by the gateway\nDATABASE_URL=postgres://u@127.0.0.1:5432/db?options=a=b\n\nTYPESAFE_API_KEY=k\n"), 0o600)
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -151,7 +151,7 @@ func TestWaitEnvFilesWaitsForTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"DATABASE_URL=postgres://u:p=w@127.0.0.1:5432/db", "TYPESAFE_API_KEY=k"}
+	want := []string{"DATABASE_URL=postgres://u@127.0.0.1:5432/db?options=a=b", "TYPESAFE_API_KEY=k"}
 	if !reflect.DeepEqual(env, want) {
 		t.Fatalf("env = %v, want %v", env, want)
 	}

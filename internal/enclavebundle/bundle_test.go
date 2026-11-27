@@ -102,7 +102,7 @@ func TestValidateSecretBundleRejectsUntrustedConfiguration(t *testing.T) {
 			environment: map[string]string{
 				"METERING_URL":        "https://metering.example.com",
 				"METERING_TOKEN":      "secret",
-				"ROUTER_DATABASE_URL": "postgres://nexus:pw@10.200.200.31:5432/nexus",
+				"ROUTER_DATABASE_URL": "postgres://nexus@10.200.200.31:5432/nexus",
 			},
 		},
 		{
@@ -110,7 +110,7 @@ func TestValidateSecretBundleRejectsUntrustedConfiguration(t *testing.T) {
 			environment: map[string]string{
 				"METERING_URL":        "https://metering.example.com",
 				"METERING_TOKEN":      "secret",
-				"ROUTER_DATABASE_URL": "postgres://nexus:pw@127.0.0.1:5432",
+				"ROUTER_DATABASE_URL": "postgres://nexus@127.0.0.1:5432",
 			},
 		},
 		{
@@ -147,7 +147,7 @@ func TestValidateSecretBundleAcceptsInEnclaveRouter(t *testing.T) {
 			"METERING_URL":        "https://metering.example.com",
 			"METERING_TOKEN":      "secret",
 			"ROUTER_URL":          "http://127.0.0.1:8083",
-			"ROUTER_DATABASE_URL": "postgres://nexus:p%40ss@127.0.0.1:5432/nexus?sslmode=disable",
+			"ROUTER_DATABASE_URL": "postgres://nexus@127.0.0.1:5432/nexus?sslmode=disable",
 			"TYPESAFE_API_KEY":    "ts-key",
 		},
 	}

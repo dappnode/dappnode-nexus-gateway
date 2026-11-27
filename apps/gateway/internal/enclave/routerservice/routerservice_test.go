@@ -17,21 +17,21 @@ func getenv(values map[string]string) func(string) string {
 
 func TestEnvironmentPassesDatabaseAndTypeSafe(t *testing.T) {
 	env, err := Environment(getenv(map[string]string{
-		"ROUTER_DATABASE_URL": "postgres://nexus:pw@127.0.0.1:5432/nexus?sslmode=disable",
+		"ROUTER_DATABASE_URL": "postgres://nexus@127.0.0.1:5432/nexus?sslmode=disable",
 		"TYPESAFE_API_KEY":    "ts-key",
 		"METERING_TOKEN":      "not for the router",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(env) != 2 || env["DATABASE_URL"] != "postgres://nexus:pw@127.0.0.1:5432/nexus?sslmode=disable" || env["TYPESAFE_API_KEY"] != "ts-key" {
+	if len(env) != 2 || env["DATABASE_URL"] != "postgres://nexus@127.0.0.1:5432/nexus?sslmode=disable" || env["TYPESAFE_API_KEY"] != "ts-key" {
 		t.Fatalf("env = %v", env)
 	}
 }
 
 func TestEnvironmentWithoutTypeSafe(t *testing.T) {
 	env, err := Environment(getenv(map[string]string{
-		"ROUTER_DATABASE_URL": "postgres://nexus:pw@127.0.0.1:5432/nexus",
+		"ROUTER_DATABASE_URL": "postgres://nexus@127.0.0.1:5432/nexus",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -44,13 +44,13 @@ func TestEnvironmentWithoutTypeSafe(t *testing.T) {
 func TestEnvironmentRejectsDatabasesOutsideTheRelay(t *testing.T) {
 	for name, value := range map[string]string{
 		"missing":         "",
-		"other host":      "postgres://nexus:pw@10.200.200.31:5432/nexus",
-		"other port":      "postgres://nexus:pw@127.0.0.1:5433/nexus",
-		"name not ip":     "postgres://nexus:pw@localhost:5432/nexus",
-		"no port":         "postgres://nexus:pw@127.0.0.1/nexus",
+		"other host":      "postgres://nexus@10.200.200.31:5432/nexus",
+		"other port":      "postgres://nexus@127.0.0.1:5433/nexus",
+		"name not ip":     "postgres://nexus@localhost:5432/nexus",
+		"no port":         "postgres://nexus@127.0.0.1/nexus",
 		"not postgres":    "mysql://nexus:pw@127.0.0.1:5432/nexus",
-		"no database":     "postgres://nexus:pw@127.0.0.1:5432/",
-		"multiple hosts":  "postgres://nexus:pw@127.0.0.1:5432,10.0.0.1:5432/nexus",
+		"no database":     "postgres://nexus@127.0.0.1:5432/",
+		"multiple hosts":  "postgres://nexus@127.0.0.1:5432,10.0.0.1:5432/nexus",
 		"unparseable url": "postgres://%zz",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -119,7 +119,7 @@ func TestWriteEnvFileRejectsLineBreaks(t *testing.T) {
 // keeps the two from drifting apart.
 func TestBundleValidationAgreesOnTheRelayAddress(t *testing.T) {
 	now := time.Now().UTC()
-	databaseURL := "postgres://nexus:pw@" + enclavenetwork.RouterDatabaseAddress + "/nexus"
+	databaseURL := "postgres://nexus@" + enclavenetwork.RouterDatabaseAddress + "/nexus"
 	bundle := enclavebundle.SecretBundle{
 		SchemaVersion:  enclavebundle.SchemaVersion,
 		SourceRevision: strings.Repeat("a", 40),
