@@ -2,7 +2,8 @@
 // one Nitro enclave. A Nitro enclave has no container runtime, so Docker
 // Compose cannot run in it; this plays that role, from a file baked into the
 // measured image that uses Compose's own key names where the meaning is the
-// same (command, user, working_dir, environment, depends_on, restart):
+// same (command, user, working_dir, environment, env_file, depends_on,
+// restart):
 //
 //	services:
 //	  presidio:
@@ -20,6 +21,11 @@
 // service that exits, and on SIGTERM stops them in reverse order. If a service
 // never becomes healthy the init exits, which ends the enclave visibly instead
 // of serving without it.
+//
+// env_file differs from Compose in one way: a file that does not exist yet is
+// waited for instead of being an error. The Gateway writes the Router's file
+// once the enclave has received its secrets, which can be minutes after boot.
+// The file is read again before every restart.
 package main
 
 import (
@@ -30,12 +36,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -62,6 +71,9 @@ type service struct {
 	Workdir string            `yaml:"working_dir"`
 	User    *uint32           `yaml:"user"` // Numeric uid/gid; unset runs as the init's user.
 	Env     map[string]string `yaml:"environment"`
+	// EnvFiles are read before each start; environment wins over them, as in
+	// Compose.
+	EnvFiles envFiles `yaml:"env_file"`
 	// InheritEnv passes the init's whole environment (the image's ENV) to the
 	// service. Off by default, so one service's settings cannot leak into
 	// another (Presidio's image sets PORT=3000, which the gateway also reads).
@@ -74,6 +86,22 @@ type service struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	running bool
+}
+
+// envFiles accepts Compose's two spellings: one path or a list of paths.
+type envFiles []string
+
+func (f *envFiles) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		*f = envFiles{node.Value}
+		return nil
+	}
+	var paths []string
+	if err := node.Decode(&paths); err != nil {
+		return err
+	}
+	*f = paths
+	return nil
 }
 
 type health struct {
@@ -114,6 +142,9 @@ func main() {
 			supervise(ctx, svc, started)
 		}()
 		if err := <-started; err != nil {
+			if ctx.Err() != nil {
+				break // asked to stop while this service was still waiting
+			}
 			log.Printf("%s did not start: %v", name, err)
 			stop()
 			shutdown(s, order)
@@ -161,6 +192,11 @@ func load(path string) (*spec, []string, error) {
 		}
 		if svc.Restart != "" && svc.Restart != "always" && svc.Restart != "no" {
 			return nil, nil, fmt.Errorf("%s: restart must be always or no", name)
+		}
+		for _, path := range svc.EnvFiles {
+			if !filepath.IsAbs(path) {
+				return nil, nil, fmt.Errorf("%s: env_file %q must be an absolute path", name, path)
+			}
 		}
 		for _, dep := range svc.DependsOn {
 			if _, ok := s.Services[dep]; !ok {
@@ -213,7 +249,16 @@ func startOrder(services map[string]*service) ([]string, error) {
 func supervise(ctx context.Context, svc *service, started chan<- error) {
 	backoff := time.Second
 	for attempt := 0; ; attempt++ {
-		cmd, err := start(svc)
+		fileEnv, err := waitEnvFiles(ctx, svc)
+		if err != nil {
+			if attempt == 0 {
+				started <- err
+			} else if ctx.Err() == nil {
+				log.Printf("%s cannot restart: %v", svc.name, err)
+			}
+			return
+		}
+		cmd, err := start(svc, fileEnv)
 		if attempt == 0 {
 			started <- err
 		}
@@ -254,7 +299,7 @@ func supervise(ctx context.Context, svc *service, started chan<- error) {
 	}
 }
 
-func start(svc *service) (*exec.Cmd, error) {
+func start(svc *service, fileEnv []string) (*exec.Cmd, error) {
 	cmd := exec.Command(svc.Command[0], svc.Command[1:]...)
 	cmd.Dir = svc.Workdir
 	if svc.InheritEnv {
@@ -262,6 +307,8 @@ func start(svc *service) (*exec.Cmd, error) {
 	} else {
 		cmd.Env = baseEnv()
 	}
+	// Later entries win in exec, so environment overrides env_file.
+	cmd.Env = append(cmd.Env, fileEnv...)
 	keys := make([]string, 0, len(svc.Env))
 	for k := range svc.Env {
 		keys = append(keys, k)
@@ -298,6 +345,60 @@ func start(svc *service) (*exec.Cmd, error) {
 	svc.running = true
 	svc.mu.Unlock()
 	return cmd, nil
+}
+
+// waitEnvFiles reads the service's env files, waiting for any that do not
+// exist yet, and returns their KEY=VALUE entries in order.
+func waitEnvFiles(ctx context.Context, svc *service) ([]string, error) {
+	var env []string
+	for _, path := range svc.EnvFiles {
+		waitingSince := time.Time{}
+		for {
+			entries, err := readEnvFile(path)
+			if err == nil {
+				if !waitingSince.IsZero() {
+					log.Printf("%s: %s appeared after %s", svc.name, path, time.Since(waitingSince).Round(time.Second))
+				}
+				env = append(env, entries...)
+				break
+			}
+			if !errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("read env_file %s: %w", path, err)
+			}
+			if waitingSince.IsZero() {
+				waitingSince = time.Now()
+				log.Printf("%s: waiting for %s", svc.name, path)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+	}
+	return env, nil
+}
+
+// readEnvFile parses KEY=VALUE lines. Blank lines and lines starting with #
+// are skipped; values are taken literally, without quote processing.
+func readEnvFile(path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var env []string
+	for i, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		key, _, ok := strings.Cut(line, "=")
+		if !ok || key == "" || strings.TrimSpace(key) != key {
+			return nil, fmt.Errorf("line %d is not KEY=VALUE", i+1)
+		}
+		env = append(env, line)
+	}
+	return env, nil
 }
 
 // baseEnv is what a service gets when it does not inherit the environment.

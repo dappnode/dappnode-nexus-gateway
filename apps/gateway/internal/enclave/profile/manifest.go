@@ -14,7 +14,10 @@ const (
 	ParentCID         = 3
 	KMSVsockPort      = 8000
 	MeteringVsockPort = 8444
-	RouterVsockPort   = 8445
+	// DatabaseVsockPort carries the in-enclave Router's Postgres connection to
+	// the parent, which relays it to the Nexus database. The Router only reads
+	// routing configuration over it; prompts never cross it.
+	DatabaseVsockPort = 8454
 	// MetricsVsockPort serves Prometheus metrics to the parent, which forwards
 	// them to the scraper. The parent connects in, so this adds no way out of
 	// the enclave. Metrics carry model, provider and error labels, never
@@ -80,7 +83,7 @@ type egressProfile struct {
 	KMSVsockPort      uint32                `json:"kms_vsock_port"`
 	ProviderRoutes    []ProviderEgressRoute `json:"provider_routes"`
 	MeteringVsockPort uint32                `json:"metering_vsock_port"`
-	RouterVsockPort   uint32                `json:"router_vsock_port"`
+	DatabaseVsockPort uint32                `json:"database_vsock_port"`
 }
 
 type ingressProfile struct {
@@ -118,7 +121,7 @@ func ManifestJSON() []byte {
 			KMSVsockPort:      KMSVsockPort,
 			ProviderRoutes:    ProviderEgressRoutes(),
 			MeteringVsockPort: MeteringVsockPort,
-			RouterVsockPort:   RouterVsockPort,
+			DatabaseVsockPort: DatabaseVsockPort,
 		},
 		Ingress: ingressProfile{
 			GatewayVsockPort: GatewayPort,

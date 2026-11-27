@@ -1,14 +1,15 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-# The Nitro enclave image: the gateway, nexus-enclave-init and the Presidio PII
-# analyzer, so every request a regular gateway can serve is served inside the
-# enclave and prompt text never leaves it for masking.
+# The Nitro enclave image: the gateway, nexus-enclave-init, the Presidio PII
+# analyzer and the Router, so every request a regular gateway can serve is
+# served inside the enclave and prompt text never leaves it for masking or
+# routing.
 #
 # The runtime image is Microsoft's Presidio analyzer pinned by its multi-arch
-# index digest, with the two Go binaries added on top. nexus-enclave-init is
-# the entrypoint: it starts Presidio as uid 1001 and then the gateway as root
-# (the gateway configures the enclave's network), from
-# apps/gateway/enclave/services.yaml.
+# index digest, with the Go binaries and the Router's model added on top.
+# nexus-enclave-init is the entrypoint: it starts Presidio as uid 1001, then
+# the gateway as root (the gateway configures the enclave's network), then the
+# Router as uid 1002, from apps/gateway/enclave/services.yaml.
 #
 # Pin every upstream input by digest. Together with SOURCE_DATE_EPOCH and
 # rewrite-timestamp (see deploy/nitro/build-release-assets.sh) this builds
@@ -58,12 +59,66 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -buildid=" \
     -o /out/nexus-enclave-init ./apps/gateway/cmd/nexus-enclave-init
 
+# The Router's source at the commit the regular Router runs (v0.1.53). BuildKit
+# checks out exactly this commit. To build from a local checkout instead, pass
+# --build-context router-src=<path to dappnode-nexus-router>; a release must
+# use the pinned commit, or its measurements will not reproduce.
+FROM scratch AS router-src
+ADD https://github.com/dappnode/dappnode-nexus-router.git#816ad35e3fc01bfd9ba061704d282d5fdd322284 /
+
+# The Router links against glibc (ONNX Runtime is a glibc library), so it is
+# built on the same Debian release as the Presidio runtime image (trixie).
+FROM golang:1.26.11-trixie@sha256:f9e99477a80ccd7adfb69780510b22c7249ce9169885f18aa762cd886e75e018 AS router-builder
+
+ARG TARGETARCH
+
+# ONNX Runtime 1.25.0, the version the Router's onnxruntime_go v1.30.1 expects,
+# from Microsoft's NuGet package. The package carries the Linux libraries for
+# both architectures; this checksum equals the SHA-512 NuGet publishes for it.
+ADD --checksum=sha256:c12a4e043c7ae1cee4ef99a347193eceabe2f6c828eb04f6d58ab21bcccddd8d \
+    https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.25.0/microsoft.ml.onnxruntime.1.25.0.nupkg \
+    /tmp/onnxruntime.nupkg
+RUN case "$TARGETARCH" in \
+      amd64) ort_arch=linux-x64 ;; \
+      arm64) ort_arch=linux-arm64 ;; \
+      *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && mkdir -p /out/lib \
+ && python3 -c 'import pathlib, sys, zipfile; z = zipfile.ZipFile("/tmp/onnxruntime.nupkg"); out = pathlib.Path("/out/lib"); [(out / dst).write_bytes(z.read(src)) for src, dst in ((f"runtimes/{sys.argv[1]}/native/libonnxruntime.so", "libonnxruntime.so"), ("LICENSE", "ONNXRUNTIME-LICENSE"), ("ThirdPartyNotices.txt", "ONNXRUNTIME-THIRD-PARTY-NOTICES"))]' "$ort_arch" \
+ && chmod 0755 /out/lib && chmod 0644 /out/lib/*
+
+WORKDIR /src
+COPY --from=router-src / ./
+RUN go mod download
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -buildvcs=false \
+    -trimpath \
+    -ldflags="-s -w -buildid=" \
+    -o /out/router ./apps/router
+
+# The embedding model the Router's embedding strategy uses, pinned to a
+# Hugging Face revision and checksum. It must be the model that computed the
+# example embeddings stored in the database, the one the regular Router mounts.
+FROM scratch AS router-model
+ADD --chmod=0644 --checksum=sha256:10f7a088420252b26caf819236ca2c9d2987afd0fc06fec7553b542a5655a05a \
+    https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/e8f8c211226b894fcb81acc59f3b34ba3efd5f42/onnx/model.onnx \
+    /model.onnx
+ADD --chmod=0644 --checksum=sha256:2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8 \
+    https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/e8f8c211226b894fcb81acc59f3b34ba3efd5f42/tokenizer.json \
+    /tokenizer.json
+
 FROM mcr.microsoft.com/presidio-analyzer:2.2.362@sha256:286e3fa7f3a7426e775e8564fe1870f1ba8f999d3ab8bbb8cc46a44355d9d6e9
 
 USER root
 COPY --from=builder /out/gateway /gateway
 COPY --from=builder /out/nexus-enclave-init /nexus-enclave-init
 COPY apps/gateway/enclave/services.yaml /etc/nexus/enclave-services.yaml
+COPY --from=router-builder --chmod=0755 /out/router /opt/nexus-router/router
+# Modes are set in router-builder: COPY --chmod would also apply to the new
+# lib directory and make it unreadable for the Router's user.
+COPY --from=router-builder /out/lib/ /opt/nexus-router/lib/
+COPY --from=router-src --chmod=0644 /LICENSE /opt/nexus-router/LICENSE
+COPY --from=router-model /model.onnx /tokenizer.json /opt/nexus-router/models/
 
 ENTRYPOINT ["/nexus-enclave-init", "-config", "/etc/nexus/enclave-services.yaml"]
 CMD []

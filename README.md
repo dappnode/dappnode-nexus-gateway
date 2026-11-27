@@ -147,22 +147,44 @@ metrics on vsock port 9090, which the parent forwards to Prometheus; ordinary
 builds listen on `METRICS_PORT`. Metrics carry model, provider and error labels,
 never request content.
 
-The Nitro enclave runs three processes from one measured image:
-`nexus-enclave-init` (the entrypoint), the Presidio PII analyzer and the
-Gateway. The init reads `apps/gateway/enclave/services.yaml`, starts Presidio as
-an unprivileged user, starts the Gateway once Presidio is healthy, restarts
-either if it exits, and stops both on shutdown. The Gateway reaches Presidio on
-loopback only: a Nitro build refuses to start if `PRESIDIO_ANALYZER_URL` is not
-`http://127.0.0.1:<port>`, so prompt text is never sent out of the enclave for
-masking. A key's PII mode therefore applies to confidential requests the same
-way it does on an ordinary Gateway.
+The Nitro enclave runs four processes from one measured image:
+`nexus-enclave-init` (the entrypoint), the Presidio PII analyzer, the Gateway
+and the Router. The init reads `apps/gateway/enclave/services.yaml`, starts
+Presidio as an unprivileged user, starts the Gateway once Presidio is healthy,
+then the Router as another unprivileged user, restarts any of them that exits,
+and stops them in reverse order on shutdown. The Gateway reaches Presidio and
+the Router on loopback only: a Nitro build refuses to start if
+`PRESIDIO_ANALYZER_URL` or `ROUTER_URL` is not `http://127.0.0.1:<port>`, so
+prompt text is never sent out of the enclave for masking or routing. A key's
+PII mode and routers such as `nexus/auto` therefore work on confidential
+requests the same way they do on an ordinary Gateway.
+
+The Router is `dappnode-nexus-router` built from the commit pinned in
+`apps/gateway/Dockerfile.enclave` (the release the regular Router runs), with
+ONNX Runtime and its embedding model pinned by checksum. It has no network of
+its own. Two relays in the Gateway give it the same reach as a regular Router,
+and nothing more:
+
+- Postgres, for routing configuration, through `127.0.0.1:5432`, which the
+  Gateway relays to the parent on vsock port 8454. Queries carry router and
+  model IDs, never prompt text.
+- TypeSafe, which the Jev strategy asks to classify a request, through an HTTP
+  CONNECT proxy on `127.0.0.1:3128` that opens tunnels to `api.typesafe.ai:443`
+  only, over the same measured route the Gateway's TypeSafe provider uses. TLS
+  ends at TypeSafe; the parent sees ciphertext.
+
+Its database URL (`ROUTER_DATABASE_URL`, which must point at the relay) and
+`TYPESAFE_API_KEY` arrive in the KMS-sealed secret bundle with the Gateway's
+own. The Gateway writes them to `/run/nexus/router.env` (enclave RAM, root
+only), and the init starts the Router with that file once it exists. The
+Router's admin API stays off inside the enclave.
 
 A confidential request may set `"require_attested_inference": true` in its
 encrypted envelope, next to `schema_version`, `request_id`, `issued_at` and
 `request`. The enclave then lets only attested code read the prompt: itself
 and a provider whose attestation it verifies before sending anything (today,
-Tinfoil). It refuses routers such as `nexus/auto`, which send the prompt to
-the Router, skips PII masking whatever the key's PII mode (the attested
+Tinfoil). It refuses routers such as `nexus/auto`, whose Jev strategy sends
+the prompt to TypeSafe, skips PII masking whatever the key's PII mode (the attested
 provider can't read the prompt anyway), and never falls
 back to a provider without that verification. The code the Tinfoil enclave
 must run is pinned in this binary (`tinfoilsh/confidential-model-router`):

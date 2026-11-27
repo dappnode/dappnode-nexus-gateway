@@ -26,6 +26,12 @@ func TestManifestDigestCoversBuildPolicy(t *testing.T) {
 	if !ok || egress["parent_cid"] != float64(ParentCID) {
 		t.Fatalf("manifest does not declare the Nitro parent CID: %s", manifestJSON)
 	}
+	if egress["database_vsock_port"] != float64(DatabaseVsockPort) {
+		t.Fatalf("manifest does not declare the Router's database relay: %s", manifestJSON)
+	}
+	if _, ok := egress["router_vsock_port"]; ok {
+		t.Fatalf("the Router runs inside the enclave; no Router egress may be declared: %s", manifestJSON)
+	}
 	routes, ok := egress["provider_routes"].([]any)
 	if !ok || len(routes) != len(ProviderEgressRoutes()) {
 		t.Fatalf("manifest does not declare every provider egress route: %s", manifestJSON)

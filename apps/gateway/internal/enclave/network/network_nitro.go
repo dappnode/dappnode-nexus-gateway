@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dappnode/dappnode-nexus-gateway/apps/gateway/internal/enclave/profile"
 	"github.com/mdlayher/vsock"
@@ -41,8 +42,54 @@ func ConfigureMeteringTransport(transport *http.Transport) {
 	configureTransport(transport, profile.MeteringVsockPort)
 }
 
+// ConfigureRouterTransport limits Router calls to loopback: the Router runs
+// inside the enclave, and a request routed anywhere else would carry the
+// prompt out of it.
 func ConfigureRouterTransport(transport *http.Transport) {
-	configureTransport(transport, profile.RouterVsockPort)
+	transport.Proxy = nil
+	dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if err := CheckLoopbackAddress(address); err != nil {
+			return nil, err
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+}
+
+// StartRouterRelays opens the in-enclave Router's two ways out (see
+// RouterDatabaseAddress and RouterEgressProxyAddress). Close the returned
+// listeners to stop them.
+func StartRouterRelays() ([]net.Listener, error) {
+	database, err := net.Listen("tcp4", RouterDatabaseAddress)
+	if err != nil {
+		return nil, fmt.Errorf("listen for the Router's database connections: %w", err)
+	}
+	routes := make(map[string]DialFunc, len(RouterEgressHosts))
+	for _, host := range RouterEgressHosts {
+		port, err := providerVsockPort(host)
+		if err != nil {
+			database.Close()
+			return nil, fmt.Errorf("resolve Router egress route: %w", err)
+		}
+		routes[host] = vsockDialer(port)
+	}
+	proxy, err := net.Listen("tcp4", RouterEgressProxyAddress)
+	if err != nil {
+		database.Close()
+		return nil, fmt.Errorf("listen for the Router's egress proxy: %w", err)
+	}
+	go ServeTCPRelay(database, "database", vsockDialer(profile.DatabaseVsockPort))
+	go ServeConnectProxy(proxy, routes)
+	return []net.Listener{database, proxy}, nil
+}
+
+func vsockDialer(port uint32) DialFunc {
+	return func(ctx context.Context) (net.Conn, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return vsock.Dial(profile.ParentCID, port, nil)
+	}
 }
 
 // ConfigureDefaultTransport routes package-level HTTP clients through the
